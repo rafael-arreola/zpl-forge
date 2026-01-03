@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::{ZplError, ZplResult};
 use ab_glyph::FontArc;
 use font_loader::system_fonts;
 
@@ -70,22 +71,44 @@ impl FontManager {
 
     /// Registers a new font and maps it to a range of ZPL identifiers.
     ///
+    /// Custom fonts must be in TrueType (`.ttf`) or OpenType (`.otf`) format.
+    /// Once registered, the font can be used in ZPL commands like `^A` or `^CF`
+    /// by referencing the assigned identifiers.
+    ///
     /// # Arguments
     /// * `name` - An internal name for the font.
     /// * `bytes` - The raw TrueType/OpenType font data.
-    /// * `from` - The starting ZPL identifier in the range.
-    /// * `to` - The ending ZPL identifier in the range.
+    /// * `from` - The starting ZPL identifier in the range (A-Z, 0-9).
+    /// * `to` - The ending ZPL identifier in the range (A-Z, 0-9).
     ///
     /// # Errors
     /// Returns an error if the font data is invalid.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use zpl_forge::FontManager;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut font_manager = FontManager::default();
+    ///
+    /// // Load your font file bytes
+    /// // let font_bytes = std::fs::read("fonts/Roboto-Regular.ttf")?;
+    ///
+    /// // Register it for a range of ZPL identifiers (e.g., from 'A' to 'Z')
+    /// // font_manager.register_font("Roboto", &font_bytes, 'A', 'Z')?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn register_font(
         &mut self,
         name: &str,
         bytes: &[u8],
         from: char,
         to: char,
-    ) -> Result<(), String> {
-        let font = FontArc::try_from_vec(bytes.to_vec()).map_err(|_| "Invalid font".to_string())?;
+    ) -> ZplResult<()> {
+        let font = FontArc::try_from_vec(bytes.to_vec())
+            .map_err(|_| ZplError::FontError("Invalid font data".into()))?;
         self.font_index.insert(name.to_string(), font);
         self.assign_font(name, from, to);
         Ok(())

@@ -1,6 +1,6 @@
 # ZPL-Forge
 
-[![Crates.io](https://img.shields.io/crates/v/zpl-forge.svg)](https://crates.io/crates/zpl-forge)
+[![Crates.io](https://img.shields.io/crates/v/zpl_forge.svg)](https://crates.io/crates/zpl_forge)
 [![Docs.rs](https://docs.rs/zpl-forge/badge.svg)](https://docs.rs/zpl-forge)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/rafael-arreola/zpl-forge#license)
 
@@ -106,6 +106,41 @@ fn main() {
         .expect("Error rendering");
 
     std::fs::write("output.pdf", pdf_bytes).ok();
+}
+```
+
+### Using Custom Fonts
+
+You can load and use your own TrueType (`.ttf`) or OpenType (`.otf`) fonts by registering them with the `FontManager` before rendering.
+
+```rust
+use std::sync::Arc;
+use zpl_forge::{ZplEngine, FontManager, Unit, Resolution};
+
+fn main() -> zpl_forge::ZplResult<()> {
+    let mut font_manager = FontManager::default();
+
+    // 1. Load font bytes from a file or include them at compile time
+    let font_bytes = std::fs::read("fonts/Roboto-Regular.ttf")
+        .expect("Font file not found");
+
+    // 2. Register the font and map it to a ZPL identifier range (e.g., A-Z and 0-9)
+    font_manager.register_font("Roboto", &font_bytes, 'A', '9')?;
+
+    let zpl_input = "^XA^FO50,50^AAN,50,50^FDText with Roboto font^FS^XZ";
+    let mut engine = ZplEngine::new(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(2.0),
+        Resolution::Dpi203
+    )?;
+
+    // 3. Provide the custom font manager to the engine
+    engine.set_fonts(Arc::new(font_manager));
+
+    // 4. Render to PNG or PDF
+    // ...
+    Ok(())
 }
 ```
 
