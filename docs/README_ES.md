@@ -54,7 +54,7 @@ Agrega esto a tu `Cargo.toml`:
 
 ```toml
 [dependencies]
-zpl-forge = "0.1.0"
+zpl-forge = "0.1"
 ```
 
 ## Uso
