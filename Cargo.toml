@@ -1,0 +1,27 @@
+[package]
+name = "zpl-forge"
+version = "0.1.0"
+edition = "2021"
+description = "A fast, memory-safe ZPL (Zebra Programming Language) parser and renderer."
+repository = "https://github.com/rafael-arreola/zpl-forge"
+homepage = "https://github.com/rafael-arreola/zpl-forge"
+documentation = "https://docs.rs/zpl-forge"
+license = "MIT OR Apache-2.0"
+keywords = ["zpl", "zebra", "barcode", "parser", "graphics"]
+categories = ["parsing", "rendering::graphics"]
+readme = "README.md"
+authors = ["Rafael Arreola <rafael-arreola@outlook.com>"]
+exclude = ["tests/*", "docs/*", ".github/*", "*.png", "*.pdf"]
+
+[dependencies]
+printpdf = { version = "0.8.2", features = ["png"] }
+ab_glyph = "0.2.32"
+font-loader = "0.11.0"
+image = "0.25.9"
+imageproc = "0.25.0"
+nom = "8.0"
+base64 = "0.22.1"
+rxing = "0.8.3"
+tracing = "0.1"
+hex = "0.4.3"
+thiserror = "2.0"
