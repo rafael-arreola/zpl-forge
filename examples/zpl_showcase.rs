@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::Instant;
 use zpl_forge::{
-    forge::{pdf::merge_pages_to_pdf, pdf::PdfBackend, png::PngBackend},
+    forge::{pdf::png_merge_pages_to_pdf, pdf::PdfBackend, png::PngBackend},
     Resolution, Unit, ZplEngine, ZplForgeBackend,
 };
 
@@ -826,8 +826,8 @@ pub fn render_multi_page_pdf() {
 
     println!("[multi_page_labels.pdf] Merging into multi-page PDF...");
     let merge_start = Instant::now();
-    let pdf_bytes =
-        merge_pages_to_pdf(&pages, w_dots, h_dots, dpi).expect("Failed to merge pages into PDF");
+    let pdf_bytes = png_merge_pages_to_pdf(&pages, w_dots, h_dots, dpi)
+        .expect("Failed to merge pages into PDF");
     let merge_duration = merge_start.elapsed();
 
     std::fs::write("examples/multi_page_labels.pdf", &pdf_bytes).expect("Failed to write PDF");

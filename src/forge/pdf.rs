@@ -188,12 +188,12 @@ fn build_pdf(
 ///
 /// # Example
 /// ```rust,no_run
-/// use zpl_forge::forge::pdf::merge_pages_to_pdf;
+/// use zpl_forge::forge::pdf::png_merge_pages_to_pdf;
 /// let png1_bytes: Vec<u8> = vec![]; // PNG bytes from PngBackend
 /// let png2_bytes: Vec<u8> = vec![]; // PNG bytes from PngBackend
-/// let pdf_bytes = merge_pages_to_pdf(&[png1_bytes, png2_bytes], 812.0, 406.0, 203.2).unwrap();
+/// let pdf_bytes = png_merge_pages_to_pdf(&[png1_bytes, png2_bytes], 812.0, 406.0, 203.2).unwrap();
 /// ```
-pub fn merge_pages_to_pdf(
+pub fn png_merge_pages_to_pdf(
     pages: &[Vec<u8>],
     width_dots: f64,
     height_dots: f64,
@@ -429,7 +429,7 @@ impl ZplForgeBackend for PdfBackend {
 
     fn finalize(&mut self) -> ZplResult<Vec<u8>> {
         let png_data = self.png_backend.finalize()?;
-        merge_pages_to_pdf(
+        png_merge_pages_to_pdf(
             &[png_data],
             self.width_dots,
             self.height_dots,
