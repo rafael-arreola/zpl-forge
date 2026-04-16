@@ -7,6 +7,7 @@ jobs:
   publish:
     name: Publish and Release
     runs-on: ubuntu-latest
+    environment: deployment-crates
     # Garantiza que el despliegue manual SOLO pueda ejecutarse si estás en la rama main
     if: github.ref == 'refs/heads/main'
 
