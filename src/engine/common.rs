@@ -22,6 +22,8 @@ pub enum ZplInstruction {
         reverse_print: bool,
         /// Custom text color.
         color: Option<String>,
+        /// Condition for this instruction.
+        condition: Option<(String, String)>,
     },
     /// Draws a rectangular box.
     GraphicBox {
@@ -34,6 +36,7 @@ pub enum ZplInstruction {
         custom_color: Option<String>,
         rounding: u32,
         reverse_print: bool,
+        condition: Option<(String, String)>,
     },
     /// Draws a circle.
     GraphicCircle {
@@ -44,6 +47,7 @@ pub enum ZplInstruction {
         color: char,
         custom_color: Option<String>,
         reverse_print: bool,
+        condition: Option<(String, String)>,
     },
     /// Draws an ellipse.
     GraphicEllipse {
@@ -55,6 +59,7 @@ pub enum ZplInstruction {
         color: char,
         custom_color: Option<String>,
         reverse_print: bool,
+        condition: Option<(String, String)>,
     },
     /// Renders a bitmap graphic.
     GraphicField {
@@ -64,6 +69,7 @@ pub enum ZplInstruction {
         height: u32,
         data: Vec<u8>,
         reverse_print: bool,
+        condition: Option<(String, String)>,
     },
     /// Renders a custom color image (extension).
     CustomImage {
@@ -77,6 +83,7 @@ pub enum ZplInstruction {
         height: u32,
         /// Base64 encoded image data.
         data: String,
+        condition: Option<(String, String)>,
     },
     /// Draws a Code 128 barcode.
     Code128 {
@@ -91,6 +98,7 @@ pub enum ZplInstruction {
         mode: char,
         data: String,
         reverse_print: bool,
+        condition: Option<(String, String)>,
     },
     /// Draws a QR Code.
     QRCode {
@@ -103,6 +111,7 @@ pub enum ZplInstruction {
         mask: u32,
         data: String,
         reverse_print: bool,
+        condition: Option<(String, String)>,
     },
     /// Draws a Code 39 barcode.
     Code39 {
@@ -116,6 +125,7 @@ pub enum ZplInstruction {
         interpretation_line_above: char,
         data: String,
         reverse_print: bool,
+        condition: Option<(String, String)>,
     },
 }
 

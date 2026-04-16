@@ -1,10 +1,10 @@
 use nom::{
+    Parser,
     bytes::complete::{tag, take_till},
     combinator::{cut, map_res},
-    Parser,
 };
 
-use super::{param, parse_u32, Res, Span};
+use super::{Res, Span, param, parse_u32};
 use crate::ast::cmd;
 
 /// ^GIC - Custom Image Color
@@ -68,4 +68,27 @@ pub fn cmd_glc(input: Span) -> Res<cmd::Command> {
             color: color.trim().to_owned(),
         },
     ))
+}
+
+/// ^IFC - If Condition
+/// Format: ^IFC<variable>,<value>
+pub fn cmd_ifc(input: Span) -> Res<cmd::Command> {
+    let (input, _) = tag("^IFC").parse(input)?;
+    let (input, variable) = cut(map_res(take_till(|c| c == ',' || c == '^'), |s: &str| {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            Err("variable is mandatory")
+        } else {
+            Ok(trimmed.to_owned())
+        }
+    }))
+    .parse(input)?;
+    let (input, _) = cut(tag(",")).parse(input)?;
+    let (input, value) = cut(map_res(
+        take_till(|c| c == '^'),
+        |s: &str| -> Result<String, &'static str> { Ok(s.trim().to_owned()) },
+    ))
+    .parse(input)?;
+
+    Ok((input, cmd::Command::IfCondition { variable, value }))
 }

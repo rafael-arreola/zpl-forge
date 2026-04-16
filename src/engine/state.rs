@@ -28,6 +28,8 @@ pub struct ZplInstructionState {
     pub graphic_data: Option<Vec<u8>>,
     /// The type of instruction currently being built.
     pub instruction_type: Option<ZplInstructionType>,
+    /// Optional condition for rendering.
+    pub condition: Option<(String, String)>,
 }
 
 /// Represents absolute positioning for a field.

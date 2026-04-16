@@ -1,10 +1,10 @@
 use nom::{
+    Parser,
     bytes::complete::{tag, take_till},
     combinator::{cut, map, opt},
-    Parser,
 };
 
-use super::{opt_param, param, parse_char, parse_f32, parse_u32, parse_xy, Res, Span};
+use super::{Res, Span, opt_param, param, parse_char, parse_f32, parse_u32, parse_xy};
 use crate::ast::cmd;
 use crate::ast::commons::{Justification, YesNo};
 

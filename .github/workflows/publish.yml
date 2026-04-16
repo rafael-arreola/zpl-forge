@@ -1,0 +1,38 @@
+name: Publish to Crates.io
+
+on:
+  workflow_dispatch: # Permite disparar la acción manualmente con un clic
+
+jobs:
+  publish:
+    name: Publish and Release
+    runs-on: ubuntu-latest
+    # Garantiza que el despliegue manual SOLO pueda ejecutarse si estás en la rama main
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Extract Crate Version
+        id: crate_version
+        # Lee la versión automáticamente desde tu Cargo.toml
+        run: |
+          VERSION=$(cargo read-manifest | jq -r .version)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: cargo publish
+
+      - name: Create GitHub Release
+        # Crea automáticamente un Release y un Tag (ej. v0.1.2) en GitHub con notas autogeneradas
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.crate_version.outputs.version }}
+          name: Release v${{ steps.crate_version.outputs.version }}
+          generate_release_notes: true

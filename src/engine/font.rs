@@ -123,11 +123,11 @@ impl FontManager {
             return;
         }
 
-        if let (Some(start), Some(end)) = (from_idx, to_idx) {
-            if start <= end {
-                for key in &FONT_MAP[start..=end] {
-                    self.font_map.insert(key.to_string(), name.to_string());
-                }
+        if let (Some(start), Some(end)) = (from_idx, to_idx)
+            && start <= end
+        {
+            for key in &FONT_MAP[start..=end] {
+                self.font_map.insert(key.to_string(), name.to_string());
             }
         }
     }
