@@ -141,7 +141,9 @@ impl ZplEngine {
 
             if let Some((var, expected)) = condition
                 && variables.get(var) != Some(expected)
-            {}
+            {
+                continue;
+            }
 
             match instruction {
                 common::ZplInstruction::Text {
