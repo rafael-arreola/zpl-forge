@@ -74,13 +74,19 @@ impl ZplEngine {
         mut backend: B,
         variables: &HashMap<String, String>,
     ) -> ZplResult<Vec<u8>> {
-        let replace_vars = |s: &str| -> String {
+        fn replace_vars<'a>(
+            s: &'a str,
+            variables: &HashMap<String, String>,
+        ) -> std::borrow::Cow<'a, str> {
+            if variables.is_empty() || !s.contains("{{") {
+                return std::borrow::Cow::Borrowed(s);
+            }
             let mut result = s.to_string();
             for (k, v) in variables {
                 result = result.replace(&format!("{{{{{}}}}}", k), v);
             }
-            result
-        };
+            std::borrow::Cow::Owned(result)
+        }
 
         let w_dots = self.width.clone().to_dots(self.resolution);
         let h_dots = self.height.clone().to_dots(self.resolution);
@@ -94,8 +100,27 @@ impl ZplEngine {
         backend.setup_font_manager(&font_manager);
 
         for instruction in &self.instructions {
+            let condition = match instruction {
+                common::ZplInstruction::Text { condition, .. } => condition,
+                common::ZplInstruction::GraphicBox { condition, .. } => condition,
+                common::ZplInstruction::GraphicCircle { condition, .. } => condition,
+                common::ZplInstruction::GraphicEllipse { condition, .. } => condition,
+                common::ZplInstruction::GraphicField { condition, .. } => condition,
+                common::ZplInstruction::CustomImage { condition, .. } => condition,
+                common::ZplInstruction::Code128 { condition, .. } => condition,
+                common::ZplInstruction::QRCode { condition, .. } => condition,
+                common::ZplInstruction::Code39 { condition, .. } => condition,
+            };
+
+            if let Some((var, expected)) = condition {
+                if variables.get(var) != Some(expected) {
+                    continue;
+                }
+            }
+
             match instruction {
                 common::ZplInstruction::Text {
+                    condition: _,
                     x,
                     y,
                     font,
@@ -111,12 +136,13 @@ impl ZplEngine {
                         *font,
                         *height,
                         *width,
-                        replace_vars(text),
+                        replace_vars(text, variables).into_owned(),
                         *reverse_print,
                         color.clone(),
                     )?;
                 }
                 common::ZplInstruction::GraphicBox {
+                    condition: _,
                     x,
                     y,
                     width,
@@ -140,6 +166,7 @@ impl ZplEngine {
                     )?;
                 }
                 common::ZplInstruction::GraphicCircle {
+                    condition: _,
                     x,
                     y,
                     radius,
@@ -159,6 +186,7 @@ impl ZplEngine {
                     )?;
                 }
                 common::ZplInstruction::GraphicEllipse {
+                    condition: _,
                     x,
                     y,
                     width,
@@ -180,6 +208,7 @@ impl ZplEngine {
                     )?;
                 }
                 common::ZplInstruction::GraphicField {
+                    condition: _,
                     x,
                     y,
                     width,
@@ -197,6 +226,7 @@ impl ZplEngine {
                     )?;
                 }
                 common::ZplInstruction::Code128 {
+                    condition: _,
                     x,
                     y,
                     orientation,
@@ -219,11 +249,12 @@ impl ZplEngine {
                         *interpretation_line_above,
                         *check_digit,
                         *mode,
-                        replace_vars(data),
+                        replace_vars(data, variables).into_owned(),
                         *reverse_print,
                     )?;
                 }
                 common::ZplInstruction::QRCode {
+                    condition: _,
                     x,
                     y,
                     orientation,
@@ -242,11 +273,12 @@ impl ZplEngine {
                         *magnification,
                         *error_correction,
                         *mask,
-                        replace_vars(data),
+                        replace_vars(data, variables).into_owned(),
                         *reverse_print,
                     )?;
                 }
                 common::ZplInstruction::Code39 {
+                    condition: _,
                     x,
                     y,
                     orientation,
@@ -267,11 +299,12 @@ impl ZplEngine {
                         *module_width,
                         *interpretation_line,
                         *interpretation_line_above,
-                        replace_vars(data),
+                        replace_vars(data, variables).into_owned(),
                         *reverse_print,
                     )?;
                 }
                 common::ZplInstruction::CustomImage {
+                    condition: _,
                     x,
                     y,
                     width,

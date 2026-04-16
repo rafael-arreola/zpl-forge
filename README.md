@@ -4,7 +4,8 @@
 [![Docs.rs](https://docs.rs/zpl-forge/badge.svg)](https://docs.rs/zpl-forge)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/rafael-arreola/zpl-forge#license)
 
-[English] | [Español](docs/README_ES.md)
+Check out the [examples documentation](https://github.com/rafael-arreola/zpl-forge/blob/main/examples/EXAMPLES.md) for ready-to-run code samples and their generated output images. You can run all the showcase examples locally with:
+`cargo run --example zpl_showcase`
 
 `zpl-forge` is a high-performance engine written in Rust for parsing, processing, and rendering Zebra Programming Language (ZPL) labels. The project transforms raw ZPL strings into an optimized Intermediate Representation (IR), enabling export to various formats such as PNG images or PDF documents.
 
@@ -13,8 +14,8 @@
 - **AST-Based Architecture**: Uses `nom` for robust and efficient ZPL command parsing.
 - **State Machine Engine**: Converts the command stream into a list of self-contained instructions, managing the global label state (fonts, positions, etc.).
 - **Flexible Backends**: Native support for rendering to PNG (via `imageproc`) and PDF (via `printpdf`).
-- **Extensibility**: Custom commands for color support and external image loading.
-- **Performance**: Designed to minimize allocations and remain safe in concurrent environments.
+- **Extensibility**: Custom commands for color support, external image loading, and logic rendering.
+- **Performance**: Designed to minimize allocations (Zero-allocation templating) and remain safe in concurrent environments.
 
 ## Supported ZPL Commands
 
@@ -42,11 +43,12 @@ The following commands are currently implemented and operational:
 
 ## Custom Commands (Extensions)
 
-| Command | Name         | Parameters | Description                                                                                      |
-| :------ | :----------- | :--------- | :----------------------------------------------------------------------------------------------- |
-| `^GIC`  | Custom Image | `w,h,d`    | Renders a color image. **w** and **h** define size. **d** is the binary (PNG/JPG) in **Base64**. |
-| `^GLC`  | Line Color   | `c`        | Sets the color for graphic elements in hexadecimal format (e.g., `#FF0000`).                     |
-| `^GTC`  | Text Color   | `c`        | Sets the color for text fields in hexadecimal format (e.g., `#0000FF`).                          |
+| Command | Name         | Parameters | Description                                                                                                                                                   |
+| :------ | :----------- | :--------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `^GIC`  | Custom Image | `w,h,d`    | Renders a color image. **w** and **h** define size. **d** is the binary (PNG/JPG) in **Base64**.                                                              |
+| `^GLC`  | Line Color   | `c`        | Sets the color for graphic elements in hexadecimal format (e.g., `#FF0000`).                                                                                  |
+| `^GTC`  | Text Color   | `c`        | Sets the color for text fields in hexadecimal format (e.g., `#0000FF`).                                                                                       |
+| `^IFC`  | Cond. Render | `var,val`  | **If Condition Custom:** Evaluates if a variable matches a specific value. If false, the field won't be rendered. Scope limited up to the next `^FS` command. |
 
 ## Installation
 
@@ -109,38 +111,77 @@ fn main() {
 }
 ```
 
-### Using Custom Fonts
+### Using Custom Fonts and Styles
 
 You can load and use your own TrueType (`.ttf`) or OpenType (`.otf`) fonts by registering them with the `FontManager` before rendering.
 
+_Note: In ZPL, the `^A` command does not inherently support applying **bold** or **italic** modifiers. To use those font weights, you must map the respective font files to separate, unique identifiers._
+
 ```rust
 use std::sync::Arc;
+use std::collections::HashMap;
 use zpl_forge::{ZplEngine, FontManager, Unit, Resolution};
+use zpl_forge::forge::png::PngBackend;
 
 fn main() -> zpl_forge::ZplResult<()> {
     let mut font_manager = FontManager::default();
 
-    // 1. Load font bytes from a file or include them at compile time
-    let font_bytes = std::fs::read("fonts/Roboto-Regular.ttf")
-        .expect("Font file not found");
+    // 1. Load font bytes (Regular, Bold, Italic)
+    let roboto_regular = std::fs::read("fonts/Roboto-Regular.ttf").unwrap();
+    let roboto_bold = std::fs::read("fonts/Roboto-Bold.ttf").unwrap();
+    let roboto_italic = std::fs::read("fonts/Roboto-Italic.ttf").unwrap();
 
-    // 2. Register the font and map it to a ZPL identifier range (e.g., A-Z and 0-9)
-    font_manager.register_font("Roboto", &font_bytes, 'A', '9')?;
+    // 2. Register the fonts and map them to distinct ZPL identifiers ('A', 'B', 'C')
+    font_manager.register_font("Roboto Regular", &roboto_regular, 'A', 'A')?;
+    font_manager.register_font("Roboto Bold", &roboto_bold, 'B', 'B')?;
+    font_manager.register_font("Roboto Italic", &roboto_italic, 'C', 'C')?;
 
-    let zpl_input = "^XA^FO50,50^AAN,50,50^FDText with Roboto font^FS^XZ";
+    // 3. Render using specific mapped identifiers
+    let zpl_input = "^XA
+        ^FO50,50^AAN,50,50^FDThis is Regular^FS
+        ^FO50,120^ABN,50,50^FDThis is Bold^FS
+        ^FO50,190^ACN,50,50^FDThis is Italic^FS
+        ^XZ";
+
     let mut engine = ZplEngine::new(
         zpl_input,
         Unit::Inches(4.0),
-        Unit::Inches(2.0),
+        Unit::Inches(4.0),
         Resolution::Dpi203
     )?;
 
-    // 3. Provide the custom font manager to the engine
     engine.set_fonts(Arc::new(font_manager));
+    engine.render(PngBackend::new(), &HashMap::new())?;
 
-    // 4. Render to PNG or PDF
-    // ...
     Ok(())
+}
+```
+
+### Conditional Rendering (`^IFC`)
+
+You can hide or show fields dynamically based on variables passed to the render engine. The condition expires automatically at the next `^FS` command.
+
+```rust
+use std::collections::HashMap;
+use zpl_forge::{ZplEngine, Unit, Resolution};
+use zpl_forge::forge::png::PngBackend;
+
+fn main() {
+    // If the variable "user_type" does not strictly equal "admin",
+    // the first line will NOT be rendered.
+    let zpl_input = "^XA
+        ^FO50,50^IFCuser_type,admin^A0N,50,50^FDAdmin Only Area^FS
+        ^FO50,150^A0N,50,50^FDPublic Text^FS
+        ^XZ";
+
+    let mut engine = ZplEngine::new(zpl_input, Unit::Inches(4.0), Unit::Inches(2.0), Resolution::Dpi203).unwrap();
+
+    let mut vars = HashMap::new();
+    vars.insert("user_type".to_string(), "guest".to_string()); // Condition fails
+
+    let png_backend = PngBackend::new();
+    // Only "Public Text" will be generated in the output
+    let png_bytes = engine.render(png_backend, &vars).unwrap();
 }
 ```
 

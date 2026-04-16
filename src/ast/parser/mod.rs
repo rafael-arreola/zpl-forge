@@ -51,6 +51,7 @@ pub fn parse_zpl(input: &str) -> ZplResult<Vec<cmd::Command>> {
                 custom::cmd_gic,
                 custom::cmd_gtc,
                 custom::cmd_glc,
+                custom::cmd_ifc,
                 cmd_unsupported,
             )),
         )),

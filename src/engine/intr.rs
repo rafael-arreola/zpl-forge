@@ -273,6 +273,10 @@ impl ZplInstructionBuilder {
                     self.state.instruction_type = Some(state::ZplInstructionType::CustomImage);
                 }
 
+                cmd::Command::IfCondition { variable, value } => {
+                    self.state.condition = Some((variable.clone(), value.clone()));
+                }
+
                 // Apply the instruction with the current state
                 cmd::Command::FieldSeparator => {
                     let x = self.state.position.x;
@@ -293,6 +297,7 @@ impl ZplInstructionBuilder {
                                     custom_color: self.state.attributes.custom_line_color.clone(),
                                     rounding: self.state.params.rounding,
                                     reverse_print,
+                                    condition: self.state.condition.clone(),
                                 });
                             }
                             state::ZplInstructionType::GraphicCircle => {
@@ -304,6 +309,7 @@ impl ZplInstructionBuilder {
                                     color: self.state.attributes.line_color.unwrap_or('B'),
                                     custom_color: self.state.attributes.custom_line_color.clone(),
                                     reverse_print,
+                                    condition: self.state.condition.clone(),
                                 });
                             }
                             state::ZplInstructionType::GraphicEllipse => {
@@ -316,6 +322,7 @@ impl ZplInstructionBuilder {
                                     color: self.state.attributes.line_color.unwrap_or('B'),
                                     custom_color: self.state.attributes.custom_line_color.clone(),
                                     reverse_print,
+                                    condition: self.state.condition.clone(),
                                 });
                             }
                             state::ZplInstructionType::GraphicField => {
@@ -327,6 +334,7 @@ impl ZplInstructionBuilder {
                                         height: self.state.metrics.height,
                                         data: g_data.clone(),
                                         reverse_print,
+                                        condition: self.state.condition.clone(),
                                     });
                                 }
                             }
@@ -337,6 +345,7 @@ impl ZplInstructionBuilder {
                                     width: self.state.metrics.width,
                                     height: self.state.metrics.height,
                                     data: data.clone(),
+                                    condition: self.state.condition.clone(),
                                 });
                             }
                             state::ZplInstructionType::Code128 => {
@@ -364,6 +373,7 @@ impl ZplInstructionBuilder {
                                     mode: self.state.attributes.mode.unwrap_or('N'),
                                     data: data.clone(),
                                     reverse_print,
+                                    condition: self.state.condition.clone(),
                                 });
                             }
                             state::ZplInstructionType::Code39 => {
@@ -390,6 +400,7 @@ impl ZplInstructionBuilder {
                                         .unwrap_or('N'),
                                     data: data.clone(),
                                     reverse_print,
+                                    condition: self.state.condition.clone(),
                                 });
                             }
                             state::ZplInstructionType::QRCode => {
@@ -407,6 +418,7 @@ impl ZplInstructionBuilder {
                                     mask: self.state.params.mask,
                                     data: data.clone(),
                                     reverse_print,
+                                    condition: self.state.condition.clone(),
                                 });
                             }
                             state::ZplInstructionType::Text => {
@@ -419,6 +431,7 @@ impl ZplInstructionBuilder {
                                     text: data.clone(),
                                     reverse_print,
                                     color: self.state.font.color.clone(),
+                                    condition: self.state.condition.clone(),
                                 });
                             }
                         }
@@ -432,6 +445,7 @@ impl ZplInstructionBuilder {
                             text: text.clone(),
                             reverse_print,
                             color: self.state.font.color.clone(),
+                            condition: self.state.condition.clone(),
                         });
                     }
 
@@ -439,6 +453,7 @@ impl ZplInstructionBuilder {
                     self.state.instruction_type = None;
                     self.state.graphic_data = None;
                     self.state.reverse = false;
+                    self.state.condition = None;
                 }
 
                 _ => {}

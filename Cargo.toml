@@ -11,17 +11,29 @@ keywords = ["zpl", "zebra", "barcode", "parser", "graphics"]
 categories = ["parsing", "rendering"]
 readme = "README.md"
 authors = ["Rafael Arreola <rafael-arreola@outlook.com>"]
-exclude = ["tests/*", "docs/*", ".github/*", "*.png", "*.pdf"]
+exclude = ["examples/*", "tests/*", "docs/*", ".github/*", "*.png", "*.pdf"]
 
 [dependencies]
-printpdf = { version = "0.8.2", features = ["png"] }
+printpdf = { version = "0.9.1", features = ["png"] }
 ab_glyph = "0.2.32"
 font-loader = "0.11.0"
-image = "0.25.9"
-imageproc = "0.25.0"
+image = "0.25"
+imageproc = "0.26.1"
 nom = "8.0"
 base64 = "0.22.1"
-rxing = "0.8.3"
+rxing = "0.8.5"
 tracing = "0.1"
 hex = "0.4.3"
 thiserror = "2.0"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+opt-level = 3
+strip = true
+
+[profile.dev]
+opt-level = 3
+debug = true
+incremental = true

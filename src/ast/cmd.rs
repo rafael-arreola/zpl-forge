@@ -200,6 +200,15 @@ pub enum Command {
         color: String,
     },
 
+    /// ^IFC - If Condition Custom
+    /// Custom command to render the current field only if a variable matches a value.
+    IfCondition {
+        /// The variable name
+        variable: String,
+        /// The expected value to match
+        value: String,
+    },
+
     /// ^BC - Code 128 Barcode
     /// Code 128 Barcode (Subsets A, B, and C).
     Code128 {
