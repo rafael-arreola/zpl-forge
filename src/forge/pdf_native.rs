@@ -133,18 +133,18 @@ impl PdfNativeBackend {
                 ) {
                     return (r as f64 / 255.0, g as f64 / 255.0, b as f64 / 255.0);
                 }
-            } else if hex.len() == 3 {
-                if let (Ok(r), Ok(g), Ok(b)) = (
+            } else if hex.len() == 3
+                && let (Ok(r), Ok(g), Ok(b)) = (
                     u8::from_str_radix(&hex[0..1], 16),
                     u8::from_str_radix(&hex[1..2], 16),
                     u8::from_str_radix(&hex[2..3], 16),
-                ) {
-                    return (
-                        r as f64 * 17.0 / 255.0,
-                        g as f64 * 17.0 / 255.0,
-                        b as f64 * 17.0 / 255.0,
-                    );
-                }
+                )
+            {
+                return (
+                    r as f64 * 17.0 / 255.0,
+                    g as f64 * 17.0 / 255.0,
+                    b as f64 * 17.0 / 255.0,
+                );
             }
         }
         (0.0, 0.0, 0.0)
@@ -423,6 +423,7 @@ impl PdfNativeBackend {
     /// according to the requested orientation.
     ///
     /// Returns `(abs_x, abs_y, width, height)` – all in dots.
+    #[allow(clippy::too_many_arguments)]
     fn transform_1d_bar(
         orientation: char,
         base_x: u32,
@@ -455,6 +456,7 @@ impl PdfNativeBackend {
     }
 
     /// Same as [`Self::transform_1d_bar`] but for 2-D codes (QR).
+    #[allow(clippy::too_many_arguments)]
     fn transform_2d_cell(
         orientation: char,
         base_x: u32,
