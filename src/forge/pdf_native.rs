@@ -5,7 +5,7 @@
 //! vector operations for maximum quality and minimal file size.
 
 use std::cmp::max;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::sync::Arc;
 
@@ -55,6 +55,8 @@ pub struct PdfNativeBackend {
     font_manager: Option<Arc<FontManager>>,
     images: Vec<ImageXObject>,
     image_counter: usize,
+    /// Tracks which font identifiers (e.g. 'A', 'B', '0') have been used during rendering.
+    used_fonts: HashSet<char>,
     compression: Compression,
 }
 
@@ -80,6 +82,7 @@ impl PdfNativeBackend {
             font_manager: None,
             images: Vec::new(),
             image_counter: 0,
+            used_fonts: HashSet::new(),
             compression: Compression::default(),
         }
     }
@@ -611,15 +614,20 @@ impl ZplForgeBackend for PdfNativeBackend {
             return Ok(());
         }
 
-        let font_arc = self.get_font_arc(font)?;
-
         let scale_y_dots = height.unwrap_or(9) as f32;
         let scale_x_dots = width.unwrap_or(scale_y_dots as u32) as f32;
         let px_scale = PxScale {
             x: scale_x_dots,
             y: scale_y_dots,
         };
-        let ascent_dots = font_arc.as_scaled(px_scale).ascent();
+
+        // Compute ascent in a scoped borrow so `font_arc` is dropped before the mutable insert.
+        let ascent_dots = {
+            let font_arc = self.get_font_arc(font)?;
+            font_arc.as_scaled(px_scale).ascent()
+        };
+
+        self.used_fonts.insert(font);
 
         let scale_x_pt = self.d2pt(scale_x_dots as f64);
         let scale_y_pt = self.d2pt(scale_y_dots as f64);
@@ -647,7 +655,14 @@ impl ZplForgeBackend for PdfNativeBackend {
                 ty.into(),
             ],
         );
-        self.op("Tf", vec!["F1".into(), Object::Real(1.0)]);
+        let font_resource_name = format!("F_{}", font);
+        self.op(
+            "Tf",
+            vec![
+                Object::Name(font_resource_name.into_bytes()),
+                Object::Real(1.0),
+            ],
+        );
         self.op("Tj", vec![Object::string_literal(text.as_bytes().to_vec())]);
         self.op("ET", vec![]);
 
@@ -1097,15 +1112,44 @@ impl ZplForgeBackend for PdfNativeBackend {
         let mut doc = Document::with_version("1.5");
         let pages_id = doc.new_object_id();
 
-        // ── embed font ─────────────────────────────────────────────
-        let font_bytes: &[u8] = include_bytes!("../assets/Oswald-Regular.ttf");
-        let font_data = FontData::new(font_bytes, "Oswald".to_string());
-        let font_id = doc
-            .add_font(font_data)
-            .map_err(|e| ZplError::BackendError(format!("Failed to embed font: {}", e)))?;
-
+        // ── embed fonts ────────────────────────────────────────────
+        let default_font_bytes: &[u8] = include_bytes!("../assets/Oswald-Regular.ttf");
         let mut font_dict = lopdf::Dictionary::new();
-        font_dict.set("F1", font_id);
+        let mut embedded_fonts: HashSet<String> = HashSet::new();
+
+        for font_char in &self.used_fonts {
+            let font_key = font_char.to_string();
+            let resource_name = format!("F_{}", font_char);
+
+            // Get the font name to deduplicate (multiple chars may map to same font)
+            let font_name = self
+                .font_manager
+                .as_ref()
+                .and_then(|fm| fm.get_font_name(&font_key).map(|s| s.to_string()));
+
+            let actual_name = font_name.unwrap_or_else(|| "Oswald".to_string());
+
+            // Skip if we already embedded this font under a different char
+            // but still add the resource alias
+            if embedded_fonts.contains(&actual_name) {
+                // Find the already-embedded font id by looking through font_dict
+                // Simpler: just embed again (lopdf handles dedup at compression)
+            }
+
+            let raw_bytes = self
+                .font_manager
+                .as_ref()
+                .and_then(|fm| fm.get_font_bytes(&font_key))
+                .unwrap_or(default_font_bytes);
+
+            let font_data = FontData::new(raw_bytes, actual_name.clone());
+            let font_id = doc
+                .add_font(font_data)
+                .map_err(|e| ZplError::BackendError(format!("Failed to embed font: {}", e)))?;
+
+            font_dict.set(resource_name.as_str(), font_id);
+            embedded_fonts.insert(actual_name);
+        }
 
         // ── XObject images ─────────────────────────────────────────
         let mut xobject_dict = lopdf::Dictionary::new();

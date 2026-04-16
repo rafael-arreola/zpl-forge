@@ -23,6 +23,8 @@ pub struct FontManager {
     font_map: HashMap<String, String>,
     /// Stores the actual font data indexed by internal font names.
     font_index: HashMap<String, FontArc>,
+    /// Stores the raw TTF/OTF bytes indexed by internal font names.
+    font_bytes: HashMap<String, Vec<u8>>,
 }
 
 impl Default for FontManager {
@@ -35,6 +37,7 @@ impl Default for FontManager {
         let mut current = Self {
             font_map: HashMap::new(),
             font_index: HashMap::new(),
+            font_bytes: HashMap::new(),
         };
 
         // Register the embedded font for all alphanumeric ZPL identifiers
@@ -45,6 +48,19 @@ impl Default for FontManager {
 }
 
 impl FontManager {
+    /// Retrieves the raw TTF/OTF bytes for a font by its ZPL identifier.
+    ///
+    /// This is used by backends that need the raw font data (e.g., PDF embedding).
+    pub fn get_font_bytes(&self, name: &str) -> Option<&[u8]> {
+        let font_name = self.font_map.get(name)?;
+        self.font_bytes.get(font_name).map(|v| v.as_slice())
+    }
+
+    /// Returns the internal font name mapped to a ZPL identifier.
+    pub fn get_font_name(&self, name: &str) -> Option<&str> {
+        self.font_map.get(name).map(|s| s.as_str())
+    }
+
     /// Retrieves a font by its ZPL identifier.
     ///
     /// # Arguments
@@ -99,6 +115,7 @@ impl FontManager {
         let font = FontArc::try_from_vec(bytes.to_vec())
             .map_err(|_| ZplError::FontError("Invalid font data".into()))?;
         self.font_index.insert(name.to_string(), font);
+        self.font_bytes.insert(name.to_string(), bytes.to_vec());
         self.assign_font(name, from, to);
         Ok(())
     }

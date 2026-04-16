@@ -1,7 +1,8 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Instant;
 use zpl_forge::{
-    Resolution, Unit, ZplEngine, ZplForgeBackend,
+    FontManager, Resolution, Unit, ZplEngine, ZplForgeBackend,
     forge::{
         pdf::PdfBackend, pdf::png_merge_pages_to_pdf, pdf_native::PdfNativeBackend, png::PngBackend,
     },
@@ -1015,6 +1016,108 @@ pub fn render_multi_page_pdf() {
     }
 }
 
+pub fn render_custom_fonts() {
+    let font_dir = "examples/fonts/";
+    let fonts_to_load = [
+        ("AbrilFatface", "AbrilFatface.ttf", 'A'),
+        ("Anton", "Anton.ttf", 'B'),
+        ("BebasNeue", "BebasNeue.ttf", 'C'),
+        ("Inconsolata", "Inconsolata.ttf", 'D'),
+        ("Lato", "Lato.ttf", 'E'),
+        ("Lobster", "Lobster.ttf", 'F'),
+        ("Montserrat", "Montserrat.ttf", 'G'),
+        ("OpenSans", "OpenSans.ttf", 'H'),
+        ("Pacifico", "Pacifico.ttf", 'I'),
+        ("Ubuntu", "Ubuntu.ttf", 'J'),
+    ];
+
+    let mut font_manager = FontManager::default();
+    for (name, filename, id) in fonts_to_load.iter() {
+        let path = format!("{}{}", font_dir, filename);
+        let font_bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                println!(
+                    "[custom_fonts] Skipping — font {} not found. Run examples/fonts/download_fonts.sh first.",
+                    path
+                );
+                return;
+            }
+        };
+        font_manager
+            .register_font(name, &font_bytes, *id, *id)
+            .unwrap_or_else(|_| panic!("Failed to register font: {}", name));
+    }
+    let font_manager = Arc::new(font_manager);
+
+    let zpl_input = "^XA\n\
+        ^FO50,50^AAN,50,50^FDThis is Abril Fatface (Identifier A)^FS\n\
+        ^FO50,120^ABN,50,50^FDThis is Anton (Identifier B)^FS\n\
+        ^FO50,190^ACN,50,50^FDThis is Bebas Neue (Identifier C)^FS\n\
+        ^FO50,260^ADN,50,50^FDThis is Inconsolata (Identifier D)^FS\n\
+        ^FO50,330^AEN,50,50^FDThis is Lato (Identifier E)^FS\n\
+        ^FO50,400^AFN,50,50^FDThis is Lobster (Identifier F)^FS\n\
+        ^FO50,470^AGN,50,50^FDThis is Montserrat (Identifier G)^FS\n\
+        ^FO50,540^AHN,50,50^FDThis is Open Sans (Identifier H)^FS\n\
+        ^FO50,610^AIN,50,50^FDThis is Pacifico (Identifier I)^FS\n\
+        ^FO50,680^AJN,50,50^FDThis is Ubuntu (Identifier J)^FS\n\
+        ^XZ";
+
+    let width = Unit::Inches(6.0);
+    let height = Unit::Inches(4.0);
+    let resolution = Resolution::Dpi203;
+
+    fn render_fonts<B: ZplForgeBackend>(
+        zpl: &str,
+        width: Unit,
+        height: Unit,
+        resolution: Resolution,
+        fm: &Arc<FontManager>,
+        backend: B,
+        name: &str,
+    ) {
+        let start = Instant::now();
+        let mut engine =
+            ZplEngine::new(zpl, width, height, resolution).expect("Failed to parse ZPL");
+        engine.set_fonts(fm.clone());
+        let bytes = engine
+            .render(backend, &HashMap::new())
+            .expect("Failed to render");
+        let file_path = format!("examples/{}", name);
+        std::fs::write(&file_path, &bytes).expect("Failed to write");
+        let elapsed = start.elapsed();
+        println!("[{}] Rendered in {:?}", name, elapsed);
+    }
+
+    render_fonts(
+        zpl_input,
+        width,
+        height,
+        resolution,
+        &font_manager,
+        PngBackend::new(),
+        "custom_fonts_output.png",
+    );
+    render_fonts(
+        zpl_input,
+        width,
+        height,
+        resolution,
+        &font_manager,
+        PdfBackend::new(),
+        "custom_fonts_output.pdf",
+    );
+    render_fonts(
+        zpl_input,
+        width,
+        height,
+        resolution,
+        &font_manager,
+        PdfNativeBackend::new(),
+        "custom_fonts_output_native.pdf",
+    );
+}
+
 fn main() {
     println!("Rendering all showcase examples...");
     render_01();
@@ -1028,6 +1131,7 @@ fn main() {
     render_03();
     render_04();
     render_ifc_conditional();
+    render_custom_fonts();
     render_multi_page_pdf();
     println!("All showcase examples rendered to examples/ directory!");
 }
