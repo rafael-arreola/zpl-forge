@@ -4,7 +4,7 @@
 [![Docs.rs](https://docs.rs/zpl-forge/badge.svg)](https://docs.rs/zpl-forge)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/rafael-arreola/zpl-forge#license)
 
-`zpl-forge` is a high-performance engine written in Rust for parsing, processing, and rendering Zebra Programming Language (ZPL) labels into formats like **PNG** and **PDF**. It features an AST-based parser, a global state machine, zero-allocation templating, and native multi-threading capabilities.
+`zpl-forge` is a high-performance engine written in Rust for parsing, processing, and rendering Zebra Programming Language (ZPL) labels into **PNG**, **PDF** (raster), and **Native Vector PDF** formats. It features an AST-based parser, a global state machine, zero-allocation templating, and native multi-threading capabilities.
 
 ---
 
@@ -13,7 +13,7 @@
 |                                             Standard Complex Label                                             |                                                 Custom Image Extensions                                                  |
 | :------------------------------------------------------------------------------------------------------------: | :----------------------------------------------------------------------------------------------------------------------: |
 | <img src="https://raw.githubusercontent.com/rafael-arreola/zpl-forge/main/examples/test_01.png" width="300" /> | <img src="https://raw.githubusercontent.com/rafael-arreola/zpl-forge/main/examples/test_image_color2.png" width="300" /> |
-|                                        Rendered to PNG in **~20.6 ms**                                         |                                             Rendered to PNG in **~21.8 ms**                                              |
+|                                         Rendered to PNG in **~8.1 ms**                                         |                                             Rendered to PNG in **~22.2 ms**                                              |
 
 Check out the [**Visual Documentation (EXAMPLES.md)**](https://github.com/rafael-arreola/zpl-forge/blob/main/examples/EXAMPLES.md) for more ready-to-run code samples and their generated output images.
 
@@ -28,22 +28,86 @@ If your business generates ZPL code (UPS, FedEx, USPS, internal routing), you li
 - **Record Archiving**: Save exact digital PDF copies of physical shipping labels for compliance or customer support.
 - **Dynamic Templating**: Inject variables (`{{tracking}}`, `{{name}}`) directly into the ZPL stream without string allocations.
 
+## Three Rendering Backends
+
+`zpl-forge` provides three output backends, each suited for different use cases:
+
+| Backend              | Module              | Output                | How it works                                                                                                                                                                            |
+| :------------------- | :------------------ | :-------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **PngBackend**       | `forge::png`        | Raster PNG image      | Draws onto an RGB canvas via `imageproc`. Best for previews and thumbnails.                                                                                                             |
+| **PdfBackend**       | `forge::pdf`        | PDF (embedded raster) | Renders the label as a high-resolution PNG first, then embeds it into a PDF page. Simple and pixel-accurate, but not scalable.                                                          |
+| **PdfNativeBackend** | `forge::pdf_native` | PDF (native vectors)  | Text, shapes, and barcodes are emitted as **native PDF operations** (paths, Bézier curves, embedded TTF fonts). Fully scalable, selectable text, smaller files for vector-heavy labels. |
+
+### PdfNativeBackend Architecture
+
+```
+ZPL Instructions
+       │
+       ▼
+┌─────────────────────────────────┐
+│       PdfNativeBackend          │
+│                                 │
+│  ┌───────────┐  ┌────────────┐  │
+│  │  Text     │  │  Shapes    │  │
+│  │  BT/ET    │  │  Bézier    │  │
+│  │  Tm + Tf  │  │  re/m/l/c  │  │
+│  │  Tj       │  │  f         │  │
+│  └───────────┘  └────────────┘  │
+│  ┌───────────┐  ┌────────────┐  │
+│  │  Barcodes │  │  Images    │  │
+│  │  re + f   │  │  XObject   │  │
+│  │  (native  │  │  (zlib     │  │
+│  │   rects)  │  │   RGB)     │  │
+│  └───────────┘  └────────────┘  │
+│  ┌──────────────────────────┐   │
+│  │  Reverse Print           │   │
+│  │  ExtGState BM/Difference │   │
+│  └──────────────────────────┘   │
+│                                 │
+│  Font: Embedded TTF (Oswald)    │
+│  Coords: dots → PDF points     │
+│           (Y-flip)              │
+└─────────────────────────────────┘
+       │
+       ▼
+   lopdf Document
+   (PDF 1.5)
+```
+
+- **Text**: Embedded TrueType font via `FontData`/`add_font`. Positioned with the `Tm` text matrix to support independent width/height scaling. Baseline calculated from `ab_glyph` ascent metrics.
+- **Shapes**: Rounded rectangles use cubic Bézier curves (κ = 0.5522). Circles and ellipses approximated with 4 Bézier segments. Hollow shapes rendered as outer fill + inner clear fill.
+- **Barcodes**: `rxing` generates the `BitMatrix`; each bar/cell becomes a native `re` (rectangle) operation. Supports N/R/I/B orientations.
+- **Images**: Bitmap fields (`^GF`) and custom images (`^GIC`) embedded as zlib-compressed XObject streams.
+- **Reverse Print**: Simulated via `ExtGState` with `BlendMode = Difference`.
+
 ## ⚡ Blazing Fast Performance
 
-`zpl-forge` is built for high-throughput enterprise environments.
+`zpl-forge` is built for high-throughput enterprise environments. All three backends are benchmarked below.
 
-| Operation                                       | Format | Render Time | Total Processing Time |
-| :---------------------------------------------- | :----: | :---------: | :-------------------: |
-| **Complex Shipping Label** (Barcodes, Graphics) | `PNG`  |  ~29.8 ms   |       ~30.4 ms        |
-| **Complex Shipping Label** (Barcodes, Graphics) | `PDF`  |  ~26.6 ms   |       ~27.0 ms        |
-| **Simple Dispatch Label** (Text, Lines)         | `PNG`  |   ~1.3 ms   |        ~1.5 ms        |
-| **Bitmap Image Decoding** (`^GF`)               | `PNG`  |   ~5.5 ms   |        ~5.9 ms        |
-| **Conditional Rendering** (`^IFC`)              | `PNG`  |   ~4.0 ms   |        ~4.2 ms        |
+### Render Time Comparison
 
-🚀 **Bulk PDF Generation (Parallel)**: Render **1,000 unique shipping labels** into a single multi-page PDF in **~1.0 second** (0.5s for parallel multi-core rendering + 0.5s for PDF multiplexing with `fast` compression). `ZplEngine` is `Send + Sync` — render thousands of pages across all CPU cores simultaneously.
+| Label                                     | PngBackend | PdfBackend (raster) | PdfNativeBackend (vector) |
+| :---------------------------------------- | :--------: | :-----------------: | :-----------------------: |
+| **Shipping Label** (text, boxes, barcode) |   8.1 ms   |       21.8 ms       |        **4.4 ms**         |
+| **Route Label** (text, lines)             |   1.0 ms   |       2.3 ms        |        **4.2 ms**         |
+| **Color Label** (custom colors)           |   6.7 ms   |       19.8 ms       |        **4.5 ms**         |
+| **Barcode Label** (Code128, Code39, QR)   |   7.9 ms   |       23.6 ms       |        **4.8 ms**         |
+| **Bitmap Image** (`^GF`)                  |   5.1 ms   |       15.2 ms       |          7.6 ms           |
+| **Full-Color Image** (`^GIC` base64)      |  14.2 ms   |       57.9 ms       |          43.2 ms          |
 
-> _Benchmarks run on Apple Silicon. You can reproduce these locally via:_
-> `cargo run --example zpl_showcase`
+> **Key takeaway**: For **vector-heavy labels** (text, shapes, barcodes), `PdfNativeBackend` is **~5× faster** than `PdfBackend` and even outperforms `PngBackend` because it skips rasterization entirely. For image-heavy labels, the native backend remains competitive while producing scalable output.
+
+### Bulk PDF Generation
+
+🚀 Render **1,000 unique shipping labels** into a single multi-page PDF in **~1.0 second** (parallel multi-core rendering + PDF multiplexing). `ZplEngine` is `Send + Sync`.
+
+| Compression | Merge Time | File Size |
+| :---------- | :--------: | :-------: |
+| `fast`      |   558 ms   |  36.4 MB  |
+| `default`   |   1.03 s   |  24.6 MB  |
+| `best`      |   2.07 s   |  21.0 MB  |
+
+> _Benchmarks on Apple M-series. Reproduce via:_ `cargo run --example zpl_showcase`
 
 ---
 
@@ -56,9 +120,9 @@ Add this to your `Cargo.toml`:
 zpl-forge = "0.2"
 ```
 
-## Quick Start: Zero-Allocation Templating
+## Quick Start
 
-Tired of using `.replace()` on strings? `zpl-forge` natively parses double-brace `{{variables}}` and evaluates them securely at render time without allocating new strings.
+### Render to PNG
 
 ```rust
 use std::collections::HashMap;
@@ -66,32 +130,57 @@ use zpl_forge::{ZplEngine, Unit, Resolution};
 use zpl_forge::forge::png::PngBackend;
 
 fn main() -> zpl_forge::ZplResult<()> {
-    // 1. The Raw ZPL (acts as your template)
+    let zpl = "^XA^FO50,50^A0N,50,50^FDHello ZPL-Forge^FS^XZ";
+    let engine = ZplEngine::new(zpl, Unit::Inches(4.0), Unit::Inches(2.0), Resolution::Dpi203)?;
+    let png_bytes = engine.render(PngBackend::new(), &HashMap::new())?;
+    std::fs::write("label.png", png_bytes).ok();
+    Ok(())
+}
+```
+
+### Render to Native Vector PDF
+
+```rust
+use std::collections::HashMap;
+use zpl_forge::{ZplEngine, Unit, Resolution};
+use zpl_forge::forge::pdf_native::PdfNativeBackend;
+
+fn main() -> zpl_forge::ZplResult<()> {
+    let zpl = "^XA^FO50,50^A0N,50,50^FDHello ZPL-Forge^FS^XZ";
+    let engine = ZplEngine::new(zpl, Unit::Inches(4.0), Unit::Inches(2.0), Resolution::Dpi203)?;
+    let pdf_bytes = engine.render(PdfNativeBackend::new(), &HashMap::new())?;
+    std::fs::write("label.pdf", pdf_bytes).ok();
+    Ok(())
+}
+```
+
+### Zero-Allocation Templating
+
+```rust
+use std::collections::HashMap;
+use zpl_forge::{ZplEngine, Unit, Resolution};
+use zpl_forge::forge::png::PngBackend;
+
+fn main() -> zpl_forge::ZplResult<()> {
     let zpl_template = "^XA
         ^FO50,50^A0N,50,50^FDShip to: {{recipient}}^FS
         ^FO50,120^A0N,30,30^FDTracking: {{tracking_id}}^FS
         ^BY3,2,100^FO50,160^BC^FD{{tracking_id}}^FS
         ^XZ";
 
-    // 2. Parse the AST and layout engine ONCE
     let engine = ZplEngine::new(zpl_template, Unit::Inches(4.0), Unit::Inches(2.0), Resolution::Dpi203)?;
 
-    // 3. Inject variables dynamically
     let mut vars = HashMap::new();
     vars.insert("recipient".to_string(), "John Doe".to_string());
     vars.insert("tracking_id".to_string(), "1Z9999999999999999".to_string());
 
-    // 4. Render to PNG
     let png_bytes = engine.render(PngBackend::new(), &vars)?;
     std::fs::write("label.png", png_bytes).ok();
-
     Ok(())
 }
 ```
 
 ## Supported ZPL Commands
-
-The following commands are currently implemented and operational:
 
 | Command | Name             | Parameters    | Description                                                                       |
 | :------ | :--------------- | :------------ | :-------------------------------------------------------------------------------- |
@@ -128,10 +217,6 @@ The following commands are currently implemented and operational:
 
 ### Using Custom Fonts and Styles
 
-You can load and use your own TrueType (`.ttf`) or OpenType (`.otf`) fonts by registering them with the `FontManager`.
-
-_Note: In ZPL, the `^A` command does not inherently support applying **bold** or **italic** modifiers. To use those font weights, you must map the respective font files to separate, unique identifiers._
-
 ```rust
 use std::sync::Arc;
 use std::collections::HashMap;
@@ -141,21 +226,15 @@ use zpl_forge::forge::png::PngBackend;
 fn main() -> zpl_forge::ZplResult<()> {
     let mut font_manager = FontManager::default();
 
-    // 1. Load font bytes (Regular, Bold, Italic)
     let roboto_regular = std::fs::read("fonts/Roboto-Regular.ttf").unwrap();
     let roboto_bold = std::fs::read("fonts/Roboto-Bold.ttf").unwrap();
-    let roboto_italic = std::fs::read("fonts/Roboto-Italic.ttf").unwrap();
 
-    // 2. Register the fonts and map them to distinct ZPL identifiers ('A', 'B', 'C')
     font_manager.register_font("Roboto Regular", &roboto_regular, 'A', 'A')?;
     font_manager.register_font("Roboto Bold", &roboto_bold, 'B', 'B')?;
-    font_manager.register_font("Roboto Italic", &roboto_italic, 'C', 'C')?;
 
-    // 3. Render using specific mapped identifiers
     let zpl_input = "^XA
         ^FO50,50^AAN,50,50^FDThis is Regular^FS
         ^FO50,120^ABN,50,50^FDThis is Bold^FS
-        ^FO50,190^ACN,50,50^FDThis is Italic^FS
         ^XZ";
 
     let mut engine = ZplEngine::new(zpl_input, Unit::Inches(4.0), Unit::Inches(4.0), Resolution::Dpi203)?;
@@ -168,30 +247,27 @@ fn main() -> zpl_forge::ZplResult<()> {
 
 ### Conditional Rendering (`^IFC`)
 
-You can hide or show fields dynamically based on variables evaluated at runtime. This prevents you from having to string-manipulate the ZPL structure to remove a box.
-
 ```rust
+use std::collections::HashMap;
+use zpl_forge::{ZplEngine, Unit, Resolution};
+use zpl_forge::forge::png::PngBackend;
+
 fn main() {
-    // If the variable "user_type" does not strictly equal "admin",
-    // the first line will NOT be rendered.
     let zpl_input = "^XA
         ^FO50,50^IFCuser_type,admin^A0N,50,50^FDAdmin Only Area^FS
         ^FO50,150^A0N,50,50^FDPublic Text^FS
         ^XZ";
 
-    let mut engine = ZplEngine::new(zpl_input, Unit::Inches(4.0), Unit::Inches(2.0), Resolution::Dpi203).unwrap();
+    let engine = ZplEngine::new(zpl_input, Unit::Inches(4.0), Unit::Inches(2.0), Resolution::Dpi203).unwrap();
 
     let mut vars = HashMap::new();
-    vars.insert("user_type".to_string(), "guest".to_string()); // Condition fails
+    vars.insert("user_type".to_string(), "guest".to_string());
 
-    // Only "Public Text" will be generated in the output
     let png_bytes = engine.render(PngBackend::new(), &vars).unwrap();
 }
 ```
 
 ### Multi-Page PDF Batching
-
-You can render hundreds of labels with different dynamic data into a single multi-page PDF document using `png_merge_pages_to_pdf`. Parse the ZPL template once, render each page as a PNG in parallel, and multiplex them efficiently with configurable compression levels.
 
 ```rust
 use std::collections::HashMap;
@@ -205,7 +281,6 @@ fn main() -> zpl_forge::ZplResult<()> {
     let (width, height, resolution) = (Unit::Inches(4.0), Unit::Inches(3.0), Resolution::Dpi203);
     let engine = ZplEngine::new(zpl_template, width, height, resolution)?;
 
-    // 1. Render each page individually as PNG
     let mut pages: Vec<Vec<u8>> = Vec::new();
     for i in 0..100 {
         let mut vars = HashMap::new();
@@ -213,12 +288,9 @@ fn main() -> zpl_forge::ZplResult<()> {
         pages.push(engine.render(PngBackend::new(), &vars)?);
     }
 
-    // 2. Merge all PNGs into a single multi-page PDF
     let w = width.to_dots(resolution) as f64;
     let h = height.to_dots(resolution) as f64;
-    // Available: Compression::fast(), Compression::default(), Compression::best()
     let pdf_bytes = png_merge_pages_to_pdf(&pages, w, h, resolution.dpi(), Compression::default())?;
-
     std::fs::write("labels.pdf", pdf_bytes).ok();
     Ok(())
 }
@@ -226,12 +298,10 @@ fn main() -> zpl_forge::ZplResult<()> {
 
 ## Security and Limits
 
-To ensure stability and prevent Denial of Service (DoS) attacks via memory exhaustion, `zpl-forge` implements the following restrictions:
-
-- **Canvas Size**: Rendering is limited to a maximum of **8192 x 8192 pixels**.
-- **ZPL Images (`^GF`)**: Decoded image data cannot exceed **10 MB** per command.
-- **Safe Arithmetic**: Saturating arithmetic is used for all coordinate and dimension calculations, preventing integer overflows.
-- **Unit Validation**: Input values for physical dimensions (inches, mm, cm) are normalized to prevent negative values.
+- **Canvas Size**: Maximum **8192 × 8192 pixels**.
+- **ZPL Images (`^GF`)**: Decoded data capped at **10 MB** per command.
+- **Safe Arithmetic**: Saturating arithmetic prevents integer overflows.
+- **Unit Validation**: Negative physical dimensions are normalized.
 
 ## License
 

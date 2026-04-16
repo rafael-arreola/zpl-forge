@@ -16,7 +16,6 @@ exclude = ["examples/*", "tests/*", "docs/*", ".github/*", "*.png", "*.pdf"]
 [dependencies]
 
 ab_glyph = "0.2.32"
-font-loader = "0.11.0"
 image = "0.25"
 imageproc = "0.26.1"
 nom = "8.0"

@@ -2,7 +2,10 @@ use std::collections::HashMap;
 
 use crate::{ZplError, ZplResult};
 use ab_glyph::FontArc;
-use font_loader::system_fonts;
+
+/// Default fallback font bytes embedded in the binary.
+/// This guarantees the library runs on any OS/Platform without C dependencies.
+const DEFAULT_FONT_BYTES: &[u8] = include_bytes!("../assets/Oswald-Regular.ttf");
 
 /// List of valid ZPL font identifiers (A-Z and 0-9).
 const FONT_MAP: &[char] = &[
@@ -20,42 +23,44 @@ pub struct FontManager {
     font_map: HashMap<String, String>,
     /// Stores the actual font data indexed by internal font names.
     font_index: HashMap<String, FontArc>,
+    /// Stores the raw TTF/OTF bytes indexed by internal font names.
+    font_bytes: HashMap<String, Vec<u8>>,
 }
 
 impl Default for FontManager {
-    /// Creates a `FontManager` with a default system font registered for all identifiers.
+    /// Creates a `FontManager` with a lightweight open-source default font
+    /// registered for all identifiers ('A' to '9').
     ///
-    /// It attempts to load common sans-serif fonts available on the system.
+    /// Uses Inconsolata (SIL Open Font License) embedded directly in the binary,
+    /// ensuring zero native dependencies on the host OS.
     fn default() -> Self {
         let mut current = Self {
             font_map: HashMap::new(),
             font_index: HashMap::new(),
+            font_bytes: HashMap::new(),
         };
 
-        let families = [
-            "Swiss 721",
-            "Helvetica",
-            "Roboto",
-            "Liberation Sans",
-            "DejaVu Sans",
-            "Arial",
-        ];
-
-        for family in families {
-            let prop = system_fonts::FontPropertyBuilder::new()
-                .family(family)
-                .build();
-            if let Some((data, _)) = system_fonts::get(&prop) {
-                let _ = current.register_font(family, &data, 'A', '9');
-                break;
-            }
-        }
+        // Register the embedded font for all alphanumeric ZPL identifiers
+        let _ = current.register_font("Oswald", DEFAULT_FONT_BYTES, 'A', '9');
 
         current
     }
 }
 
 impl FontManager {
+    /// Retrieves the raw TTF/OTF bytes for a font by its ZPL identifier.
+    ///
+    /// This is used by backends that need the raw font data (e.g., PDF embedding).
+    pub fn get_font_bytes(&self, name: &str) -> Option<&[u8]> {
+        let font_name = self.font_map.get(name)?;
+        self.font_bytes.get(font_name).map(|v| v.as_slice())
+    }
+
+    /// Returns the internal font name mapped to a ZPL identifier.
+    pub fn get_font_name(&self, name: &str) -> Option<&str> {
+        self.font_map.get(name).map(|s| s.as_str())
+    }
+
     /// Retrieves a font by its ZPL identifier.
     ///
     /// # Arguments
@@ -93,10 +98,10 @@ impl FontManager {
     /// let mut font_manager = FontManager::default();
     ///
     /// // Load your font file bytes
-    /// // let font_bytes = std::fs::read("fonts/Roboto-Regular.ttf")?;
+    /// // let font_bytes = std::fs::read("fonts/Oswald-Regular.ttf")?;
     ///
     /// // Register it for a range of ZPL identifiers (e.g., from 'A' to 'Z')
-    /// // font_manager.register_font("Roboto", &font_bytes, 'A', 'Z')?;
+    /// // font_manager.register_font("Oswald", &font_bytes, 'A', 'Z')?;
     /// # Ok(())
     /// # }
     /// ```
@@ -110,6 +115,7 @@ impl FontManager {
         let font = FontArc::try_from_vec(bytes.to_vec())
             .map_err(|_| ZplError::FontError("Invalid font data".into()))?;
         self.font_index.insert(name.to_string(), font);
+        self.font_bytes.insert(name.to_string(), bytes.to_vec());
         self.assign_font(name, from, to);
         Ok(())
     }

@@ -1,8 +1,11 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Instant;
 use zpl_forge::{
-    Resolution, Unit, ZplEngine, ZplForgeBackend,
-    forge::{pdf::PdfBackend, pdf::png_merge_pages_to_pdf, png::PngBackend},
+    FontManager, Resolution, Unit, ZplEngine, ZplForgeBackend,
+    forge::{
+        pdf::PdfBackend, pdf::png_merge_pages_to_pdf, pdf_native::PdfNativeBackend, png::PngBackend,
+    },
 };
 
 use rayon::prelude::*;
@@ -111,6 +114,13 @@ pub fn render_01() {
         PdfBackend::new(),
         "test_01.pdf",
     );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(6.0),
+        PdfNativeBackend::new(),
+        "test_01_native.pdf",
+    );
 }
 
 pub fn render_02() {
@@ -137,67 +147,67 @@ pub fn render_02() {
         ^FS
 
         ^FO20,14
-        ^CFA,15,10
+        ^CFA,15
         ^FDRUTA
         ^FS
 
         ^FO15,45
-        ^CFA,60,25
+        ^CFA,45
         ^FDB7-1
         ^FS
 
         ^FO20,115
-        ^CFA,30,15
+        ^CFA,25
         ^FDKUW-068
         ^FS
 
         ^FO190,14
-        ^CFA,15,10
+        ^CFA,15
         ^FDN/A
         ^FS
 
         ^FO20,166
-        ^CFA,15,10
+        ^CFA,15
         ^FDDT:
         ^FS
 
-        ^FO55,166
-        ^CFA,15,8
-        ^FD 04/12/2025
+        ^FO60,166
+        ^CFA,14
+        ^FD04/12/2025
         ^FS
 
         ^FO205,166
-        ^CFA,15,10
+        ^CFA,15
         ^FDID:
         ^FS
 
-        ^FO230,166
-        ^CFA,15,8
-        ^FD 1496362371
+        ^FO225,166
+        ^CFA,12
+        ^FD1496362371
         ^FS
 
         ^FO280,18
-        ^CFA,15,10
+        ^CFA,15
         ^FDPARADA
         ^FS
 
         ^FO280,50
-        ^CFA,15,10
+        ^CFA,15
         ^FD1
         ^FS
 
         ^FO280,90
-        ^CFA,15,10
+        ^CFA,15
         ^FDPUNTO
-        ^FS
-
-        ^FO290,125
-        ^CFA,15,10
-        ^FD0
         ^FS
 
         ^FO280,115
         ^GB30,30,2,,8
+        ^FS
+
+        ^FO289,121
+        ^CFA,16
+        ^FD0
         ^FS
 
         ^XZ
@@ -208,6 +218,20 @@ pub fn render_02() {
         Unit::Inches(1.0),
         PngBackend::new(),
         "test_02.png",
+    );
+    run_test(
+        zpl_input,
+        Unit::Inches(2.0),
+        Unit::Inches(1.0),
+        PdfBackend::new(),
+        "test_02.pdf",
+    );
+    run_test(
+        zpl_input,
+        Unit::Inches(2.0),
+        Unit::Inches(1.0),
+        PdfNativeBackend::new(),
+        "test_02_native.pdf",
     );
 }
 
@@ -228,6 +252,20 @@ pub fn render_image() {
         PngBackend::new(),
         "test_image.png",
     );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(6.0),
+        PdfBackend::new(),
+        "test_image.pdf",
+    );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(6.0),
+        PdfNativeBackend::new(),
+        "test_image_native.pdf",
+    );
 }
 
 pub fn render_image2() {
@@ -247,6 +285,20 @@ pub fn render_image2() {
         PngBackend::new(),
         "test_image2.png",
     );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(6.0),
+        PdfBackend::new(),
+        "test_image2.pdf",
+    );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(6.0),
+        PdfNativeBackend::new(),
+        "test_image2_native.pdf",
+    );
 }
 
 pub fn render_image_color() {
@@ -262,6 +314,20 @@ pub fn render_image_color() {
         Unit::Inches(6.0),
         PngBackend::new(),
         "test_image_color.png",
+    );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(6.0),
+        PdfBackend::new(),
+        "test_image_color.pdf",
+    );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(6.0),
+        PdfNativeBackend::new(),
+        "test_image_color_native.pdf",
     );
 }
 
@@ -279,6 +345,20 @@ pub fn render_image_color2() {
         PngBackend::new(),
         "test_image_color2.png",
     );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(6.0),
+        PdfBackend::new(),
+        "test_image_color2.pdf",
+    );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(6.0),
+        PdfNativeBackend::new(),
+        "test_image_color2_native.pdf",
+    );
 }
 
 pub fn render_image_color3() {
@@ -295,6 +375,20 @@ pub fn render_image_color3() {
         PngBackend::new(),
         "test_image_color3.png",
     );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(6.0),
+        PdfBackend::new(),
+        "test_image_color3.pdf",
+    );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(6.0),
+        PdfNativeBackend::new(),
+        "test_image_color3_native.pdf",
+    );
 }
 
 pub fn render_image_color4() {
@@ -310,6 +404,20 @@ pub fn render_image_color4() {
         Unit::Inches(6.0),
         PngBackend::new(),
         "test_image_color4.png",
+    );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(6.0),
+        PdfBackend::new(),
+        "test_image_color4.pdf",
+    );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(6.0),
+        PdfNativeBackend::new(),
+        "test_image_color4_native.pdf",
     );
 }
 
@@ -379,6 +487,20 @@ pub fn render_03() {
         PngBackend::new(),
         "test_03.png",
     );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(6.0),
+        PdfBackend::new(),
+        "test_03.pdf",
+    );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(6.0),
+        PdfNativeBackend::new(),
+        "test_03_native.pdf",
+    );
 }
 
 pub fn render_04() {
@@ -411,6 +533,20 @@ pub fn render_04() {
         PngBackend::new(),
         "test_04.png",
     );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(8.0),
+        PdfBackend::new(),
+        "test_04.pdf",
+    );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(8.0),
+        PdfNativeBackend::new(),
+        "test_04_native.pdf",
+    );
 }
 
 pub fn render_ifc_conditional() {
@@ -442,6 +578,14 @@ pub fn render_ifc_conditional() {
         "test_ifc_false.png",
         &vars_false,
     );
+    run_test_with_vars(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(4.0),
+        PdfNativeBackend::new(),
+        "test_ifc_false_native.pdf",
+        &vars_false,
+    );
 
     // Test 2: true (Variables match)
     // Both the text and the box should appear.
@@ -455,6 +599,14 @@ pub fn render_ifc_conditional() {
         Unit::Inches(4.0),
         PngBackend::new(),
         "test_ifc_true.png",
+        &vars_true,
+    );
+    run_test_with_vars(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(4.0),
+        PdfNativeBackend::new(),
+        "test_ifc_true_native.pdf",
         &vars_true,
     );
 }
@@ -864,6 +1016,108 @@ pub fn render_multi_page_pdf() {
     }
 }
 
+pub fn render_custom_fonts() {
+    let font_dir = "examples/fonts/";
+    let fonts_to_load = [
+        ("AbrilFatface", "AbrilFatface.ttf", 'A'),
+        ("Anton", "Anton.ttf", 'B'),
+        ("BebasNeue", "BebasNeue.ttf", 'C'),
+        ("Inconsolata", "Inconsolata.ttf", 'D'),
+        ("Lato", "Lato.ttf", 'E'),
+        ("Lobster", "Lobster.ttf", 'F'),
+        ("Montserrat", "Montserrat.ttf", 'G'),
+        ("OpenSans", "OpenSans.ttf", 'H'),
+        ("Pacifico", "Pacifico.ttf", 'I'),
+        ("Ubuntu", "Ubuntu.ttf", 'J'),
+    ];
+
+    let mut font_manager = FontManager::default();
+    for (name, filename, id) in fonts_to_load.iter() {
+        let path = format!("{}{}", font_dir, filename);
+        let font_bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                println!(
+                    "[custom_fonts] Skipping — font {} not found. Run examples/fonts/download_fonts.sh first.",
+                    path
+                );
+                return;
+            }
+        };
+        font_manager
+            .register_font(name, &font_bytes, *id, *id)
+            .unwrap_or_else(|_| panic!("Failed to register font: {}", name));
+    }
+    let font_manager = Arc::new(font_manager);
+
+    let zpl_input = "^XA\n\
+        ^FO50,50^AAN,50,50^FDThis is Abril Fatface (Identifier A)^FS\n\
+        ^FO50,120^ABN,50,50^FDThis is Anton (Identifier B)^FS\n\
+        ^FO50,190^ACN,50,50^FDThis is Bebas Neue (Identifier C)^FS\n\
+        ^FO50,260^ADN,50,50^FDThis is Inconsolata (Identifier D)^FS\n\
+        ^FO50,330^AEN,50,50^FDThis is Lato (Identifier E)^FS\n\
+        ^FO50,400^AFN,50,50^FDThis is Lobster (Identifier F)^FS\n\
+        ^FO50,470^AGN,50,50^FDThis is Montserrat (Identifier G)^FS\n\
+        ^FO50,540^AHN,50,50^FDThis is Open Sans (Identifier H)^FS\n\
+        ^FO50,610^AIN,50,50^FDThis is Pacifico (Identifier I)^FS\n\
+        ^FO50,680^AJN,50,50^FDThis is Ubuntu (Identifier J)^FS\n\
+        ^XZ";
+
+    let width = Unit::Inches(6.0);
+    let height = Unit::Inches(4.0);
+    let resolution = Resolution::Dpi203;
+
+    fn render_fonts<B: ZplForgeBackend>(
+        zpl: &str,
+        width: Unit,
+        height: Unit,
+        resolution: Resolution,
+        fm: &Arc<FontManager>,
+        backend: B,
+        name: &str,
+    ) {
+        let start = Instant::now();
+        let mut engine =
+            ZplEngine::new(zpl, width, height, resolution).expect("Failed to parse ZPL");
+        engine.set_fonts(fm.clone());
+        let bytes = engine
+            .render(backend, &HashMap::new())
+            .expect("Failed to render");
+        let file_path = format!("examples/{}", name);
+        std::fs::write(&file_path, &bytes).expect("Failed to write");
+        let elapsed = start.elapsed();
+        println!("[{}] Rendered in {:?}", name, elapsed);
+    }
+
+    render_fonts(
+        zpl_input,
+        width,
+        height,
+        resolution,
+        &font_manager,
+        PngBackend::new(),
+        "custom_fonts_output.png",
+    );
+    render_fonts(
+        zpl_input,
+        width,
+        height,
+        resolution,
+        &font_manager,
+        PdfBackend::new(),
+        "custom_fonts_output.pdf",
+    );
+    render_fonts(
+        zpl_input,
+        width,
+        height,
+        resolution,
+        &font_manager,
+        PdfNativeBackend::new(),
+        "custom_fonts_output_native.pdf",
+    );
+}
+
 fn main() {
     println!("Rendering all showcase examples...");
     render_01();
@@ -877,6 +1131,7 @@ fn main() {
     render_03();
     render_04();
     render_ifc_conditional();
+    render_custom_fonts();
     render_multi_page_pdf();
     println!("All showcase examples rendered to examples/ directory!");
 }
