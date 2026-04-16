@@ -137,67 +137,67 @@ pub fn render_02() {
         ^FS
 
         ^FO20,14
-        ^CFA,15,10
+        ^CFA,15
         ^FDRUTA
         ^FS
 
         ^FO15,45
-        ^CFA,60,25
+        ^CFA,45
         ^FDB7-1
         ^FS
 
         ^FO20,115
-        ^CFA,30,15
+        ^CFA,25
         ^FDKUW-068
         ^FS
 
         ^FO190,14
-        ^CFA,15,10
+        ^CFA,15
         ^FDN/A
         ^FS
 
         ^FO20,166
-        ^CFA,15,10
+        ^CFA,15
         ^FDDT:
         ^FS
 
-        ^FO55,166
-        ^CFA,15,8
-        ^FD 04/12/2025
+        ^FO60,166
+        ^CFA,14
+        ^FD04/12/2025
         ^FS
 
         ^FO205,166
-        ^CFA,15,10
+        ^CFA,15
         ^FDID:
         ^FS
 
-        ^FO230,166
-        ^CFA,15,8
-        ^FD 1496362371
+        ^FO225,166
+        ^CFA,12
+        ^FD1496362371
         ^FS
 
         ^FO280,18
-        ^CFA,15,10
+        ^CFA,15
         ^FDPARADA
         ^FS
 
         ^FO280,50
-        ^CFA,15,10
+        ^CFA,15
         ^FD1
         ^FS
 
         ^FO280,90
-        ^CFA,15,10
+        ^CFA,15
         ^FDPUNTO
-        ^FS
-
-        ^FO290,125
-        ^CFA,15,10
-        ^FD0
         ^FS
 
         ^FO280,115
         ^GB30,30,2,,8
+        ^FS
+
+        ^FO289,121
+        ^CFA,16
+        ^FD0
         ^FS
 
         ^XZ
