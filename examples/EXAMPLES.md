@@ -80,3 +80,18 @@ Demonstrates the `^IFC` (If Condition Custom) command, which selectively renders
 
 **Condition Failed (Admin elements hidden):**
 ![Conditional Rendering False](https://raw.githubusercontent.com/rafael-arreola/zpl-forge/main/examples/test_ifc_false.png)
+
+---
+
+## Multi-Page PDF
+
+Demonstrates rendering 100 different shipping labels (each with unique data) into a single multi-page PDF document using `merge_pages_to_pdf`. The ZPL template is parsed once, then rendered 100 times with different variables, and finally merged into one PDF.
+
+- **Source:** [`multi_page_pdf.rs`](https://github.com/rafael-arreola/zpl-forge/blob/main/examples/multi_page_pdf.rs)
+- **PDF Output:** [`multi_page_labels.pdf`](https://github.com/rafael-arreola/zpl-forge/raw/main/examples/multi_page_labels.pdf)
+
+Run it with:
+
+```
+cargo run --example multi_page_pdf
+```

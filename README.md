@@ -4,8 +4,13 @@
 [![Docs.rs](https://docs.rs/zpl-forge/badge.svg)](https://docs.rs/zpl-forge)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/rafael-arreola/zpl-forge#license)
 
-Check out the [examples documentation](https://github.com/rafael-arreola/zpl-forge/blob/main/examples/EXAMPLES.md) for ready-to-run code samples and their generated output images. You can run all the showcase examples locally with:
-`cargo run --example zpl_showcase`
+Check out the [examples documentation](https://github.com/rafael-arreola/zpl-forge/blob/main/examples/EXAMPLES.md) for ready-to-run code samples and their generated output images. You can run the examples locally with:
+
+```sh
+cargo run --example zpl_showcase        # Render all label showcases
+cargo run --example multi_page_pdf      # Render 100 labels into a single PDF
+cargo run --example custom_fonts        # Render using custom TTF fonts (requires downloading fonts first)
+```
 
 `zpl-forge` is a high-performance engine written in Rust for parsing, processing, and rendering Zebra Programming Language (ZPL) labels. The project transforms raw ZPL strings into an optimized Intermediate Representation (IR), enabling export to various formats such as PNG images or PDF documents.
 
@@ -13,7 +18,7 @@ Check out the [examples documentation](https://github.com/rafael-arreola/zpl-for
 
 - **AST-Based Architecture**: Uses `nom` for robust and efficient ZPL command parsing.
 - **State Machine Engine**: Converts the command stream into a list of self-contained instructions, managing the global label state (fonts, positions, etc.).
-- **Flexible Backends**: Native support for rendering to PNG (via `imageproc`) and PDF (via `printpdf`).
+- **Flexible Backends**: Native support for rendering to PNG (via `imageproc`) and single or multi-page PDF (via `lopdf`).
 - **Extensibility**: Custom commands for color support, external image loading, and logic rendering.
 - **Performance**: Designed to minimize allocations (Zero-allocation templating) and remain safe in concurrent environments.
 
@@ -184,6 +189,54 @@ fn main() {
     let png_bytes = engine.render(png_backend, &vars).unwrap();
 }
 ```
+
+### Multi-Page PDF
+
+You can render multiple labels with different data into a single multi-page PDF document using `merge_pages_to_pdf`. Parse the ZPL template once, render each page as a PNG, and merge them all at the end.
+
+```rust
+use std::collections::HashMap;
+use zpl_forge::{ZplEngine, Unit, Resolution};
+use zpl_forge::forge::png::PngBackend;
+use zpl_forge::forge::pdf::merge_pages_to_pdf;
+
+fn main() -> zpl_forge::ZplResult<()> {
+    let zpl_template = "^XA
+        ^CF0,30
+        ^FO50,50^FDOrder: {{order_id}}^FS
+        ^FO50,100^FDRecipient: {{name}}^FS
+        ^BY3,2,100
+        ^FO100,160^BC^FD{{order_id}}^FS
+        ^XZ";
+
+    let width = Unit::Inches(4.0);
+    let height = Unit::Inches(3.0);
+    let resolution = Resolution::Dpi203;
+
+    let engine = ZplEngine::new(zpl_template, width, height, resolution)?;
+
+    // Render each page individually as PNG
+    let mut pages: Vec<Vec<u8>> = Vec::new();
+    for i in 0..100 {
+        let mut vars = HashMap::new();
+        vars.insert("order_id".to_string(), format!("ORD-{}", 1001 + i));
+        vars.insert("name".to_string(), format!("Customer {}", i + 1));
+
+        pages.push(engine.render(PngBackend::new(), &vars)?);
+    }
+
+    // Merge all PNGs into a single multi-page PDF
+    let w = width.to_dots(resolution) as f64;
+    let h = height.to_dots(resolution) as f64;
+    let pdf_bytes = merge_pages_to_pdf(&pages, w, h, resolution.dpi())?;
+
+    std::fs::write("labels.pdf", pdf_bytes).ok();
+    Ok(())
+}
+```
+
+> A full working example with 100 pages and benchmarks is available at [`examples/multi_page_pdf.rs`](https://github.com/rafael-arreola/zpl-forge/blob/main/examples/multi_page_pdf.rs).
+> Run it with: `cargo run --example multi_page_pdf`
 
 ## Security and Limits
 

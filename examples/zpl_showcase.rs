@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::Instant;
 use zpl_forge::{
-    forge::{pdf::PdfBackend, png::PngBackend},
+    forge::{pdf::merge_pages_to_pdf, pdf::PdfBackend, png::PngBackend},
     Resolution, Unit, ZplEngine, ZplForgeBackend,
 };
 
@@ -457,6 +457,394 @@ pub fn render_ifc_conditional() {
     );
 }
 
+pub fn render_multi_page_pdf() {
+    let total_pages = 1000;
+
+    let zpl_template = "^XA
+        ^CF0,40
+        ^FO50,30^FDShipping Label^FS
+        ^FO50,80^GB700,3,3^FS
+        ^CF0,30
+        ^FO50,100^FDOrder: {{order_id}}^FS
+        ^FO50,140^FDRecipient: {{name}}^FS
+        ^FO50,180^FDAddress: {{address}}^FS
+        ^FO50,220^FDCity: {{city}}^FS
+        ^FO50,280^GB700,3,3^FS
+        ^BY3,2,100
+        ^FO150,300^BC^FD{{order_id}}^FS
+        ^CF0,20
+        ^FO50,440^FDPage {{page}} of {{total}}^FS
+        ^XZ";
+
+    let names = [
+        "Alice Johnson",
+        "Bob Smith",
+        "Carol White",
+        "David Brown",
+        "Eva Martinez",
+        "Frank Lee",
+        "Grace Kim",
+        "Henry Davis",
+        "Irene Clark",
+        "Jack Wilson",
+        "Karen Young",
+        "Leo Thomas",
+        "Mia Anderson",
+        "Noah Garcia",
+        "Olivia Moore",
+        "Paul Taylor",
+        "Quinn Harris",
+        "Rosa Lopez",
+        "Sam Rivera",
+        "Tina Walker",
+        "Uma Patel",
+        "Victor Chang",
+        "Wendy Foster",
+        "Xavier Ruiz",
+        "Yolanda Brooks",
+        "Zach Murray",
+        "Amelia Stone",
+        "Brian Wolfe",
+        "Clara Dunn",
+        "Derek Holt",
+        "Elena Voss",
+        "Felix Grant",
+        "Gina Marsh",
+        "Hugo Reyes",
+        "Isla Barton",
+        "James Odom",
+        "Kira Sutton",
+        "Liam Frost",
+        "Maya Hines",
+        "Oscar Duarte",
+        "Paige Keller",
+        "Reid Stanton",
+        "Sofia Navarro",
+        "Troy Benson",
+        "Ursula Craig",
+        "Vince Delgado",
+        "Willa Pearson",
+        "Xander Lowe",
+        "Yara Medina",
+        "Zane Pratt",
+        "Abby Harmon",
+        "Blake Thornton",
+        "Celia Vaughn",
+        "Dante Moreno",
+        "Elise Shepard",
+        "Finn Callahan",
+        "Gloria Stein",
+        "Hector Nunez",
+        "Ingrid Bauer",
+        "Joel Pittman",
+        "Kelly Donovan",
+        "Lance Hubbard",
+        "Monica Rivas",
+        "Nolan Weeks",
+        "Opal Jennings",
+        "Perry Osborne",
+        "Rita Salazar",
+        "Seth Underwood",
+        "Tamara Fields",
+        "Ulric Hammond",
+        "Vera Sandoval",
+        "Wade Prescott",
+        "Ximena Robles",
+        "Yusuf Brennan",
+        "Zelda Compton",
+        "Aaron Whitley",
+        "Bianca Estrada",
+        "Colton Merritt",
+        "Diana Padilla",
+        "Eli Dickerson",
+        "Fiona Hartley",
+        "Garrett Mack",
+        "Hazel Sweeney",
+        "Ivan Ochoa",
+        "Jade Calloway",
+        "Kurt Langston",
+        "Leona Kirby",
+        "Marcus Villarreal",
+        "Nina Ashford",
+        "Omar Bentley",
+        "Piper Gallagher",
+        "Quincy Mathews",
+        "Renata Cuevas",
+        "Silas Woodward",
+        "Tessa Lawson",
+        "Upton Greer",
+        "Valeria Ibarra",
+        "Wesley Norris",
+        "Xyla Archer",
+        "Yuri Blanchard",
+    ];
+    let addresses = [
+        "123 Elm St",
+        "456 Oak Ave",
+        "789 Pine Rd",
+        "321 Maple Dr",
+        "654 Cedar Ln",
+        "987 Birch Blvd",
+        "147 Spruce Ct",
+        "258 Walnut Way",
+        "369 Aspen Pl",
+        "480 Redwood St",
+        "511 Willow Dr",
+        "622 Poplar Ave",
+        "733 Hickory Ln",
+        "844 Cypress Rd",
+        "955 Magnolia Ct",
+        "106 Cherry Way",
+        "217 Laurel Blvd",
+        "328 Juniper St",
+        "439 Sequoia Dr",
+        "540 Hemlock Pl",
+        "651 Dogwood Cir",
+        "762 Chestnut Ave",
+        "873 Alder Rd",
+        "984 Sycamore St",
+        "1095 Pecan Blvd",
+        "1206 Hawthorn Dr",
+        "1317 Cottonwood Ln",
+        "1428 Beech Way",
+        "1539 Mulberry Ct",
+        "1640 Ivy Pl",
+        "1751 Olive St",
+        "1862 Myrtle Ave",
+        "1973 Palm Rd",
+        "2084 Sage Dr",
+        "2195 Fern Blvd",
+        "2306 Jasmine Ln",
+        "2417 Orchid Way",
+        "2528 Daisy Ct",
+        "2639 Violet Pl",
+        "2740 Iris St",
+        "2851 Tulip Ave",
+        "2962 Clover Rd",
+        "3073 Moss Dr",
+        "3184 Briar Blvd",
+        "3295 Thistle Ln",
+        "3406 Heath Way",
+        "3517 Primrose Ct",
+        "3628 Foxglove Pl",
+        "3739 Aster St",
+        "3840 Wren Ave",
+        "3951 Finch Rd",
+        "4062 Lark Dr",
+        "4173 Sparrow Blvd",
+        "4284 Robin Ln",
+        "4395 Crane Way",
+        "4506 Heron Ct",
+        "4617 Falcon Pl",
+        "4728 Eagle St",
+        "4839 Hawk Ave",
+        "4940 Osprey Rd",
+        "5051 Raven Dr",
+        "5162 Swift Blvd",
+        "5273 Dove Ln",
+        "5384 Oriole Way",
+        "5495 Tanager Ct",
+        "5606 Cardinal Pl",
+        "5717 Bluebird St",
+        "5828 Pelican Ave",
+        "5939 Sandpiper Rd",
+        "6040 Kingfisher Dr",
+        "6151 Warbler Blvd",
+        "6262 Starling Ln",
+        "6373 Plover Way",
+        "6484 Condor Ct",
+        "6595 Albatross Pl",
+        "6706 Summit St",
+        "6817 Ridge Ave",
+        "6928 Valley Rd",
+        "7039 Canyon Dr",
+        "7140 Mesa Blvd",
+        "7251 Prairie Ln",
+        "7362 Brook Way",
+        "7473 River Ct",
+        "7584 Lake Pl",
+        "7695 Shore St",
+        "7806 Harbor Ave",
+        "7917 Bay Rd",
+        "8028 Cove Dr",
+        "8139 Inlet Blvd",
+        "8240 Reef Ln",
+        "8351 Tide Way",
+        "8462 Shell Ct",
+        "8573 Coral Pl",
+        "8684 Pearl St",
+        "8795 Anchor Ave",
+        "8906 Beacon Rd",
+        "9017 Lighthouse Dr",
+        "9128 Marina Blvd",
+        "9239 Wharf Ln",
+        "9340 Dock Way",
+    ];
+    let cities = [
+        "Portland, OR 97201",
+        "Seattle, WA 98101",
+        "San Francisco, CA 94102",
+        "Denver, CO 80201",
+        "Austin, TX 73301",
+        "Chicago, IL 60601",
+        "New York, NY 10001",
+        "Miami, FL 33101",
+        "Boston, MA 02101",
+        "Phoenix, AZ 85001",
+        "Nashville, TN 37201",
+        "Atlanta, GA 30301",
+        "Dallas, TX 75201",
+        "San Diego, CA 92101",
+        "Columbus, OH 43201",
+        "Charlotte, NC 28201",
+        "Detroit, MI 48201",
+        "Memphis, TN 38101",
+        "Baltimore, MD 21201",
+        "Milwaukee, WI 53201",
+        "Las Vegas, NV 89101",
+        "Kansas City, MO 64101",
+        "Omaha, NE 68101",
+        "Raleigh, NC 27601",
+        "Tucson, AZ 85701",
+        "Sacramento, CA 95801",
+        "Cleveland, OH 44101",
+        "Pittsburgh, PA 15201",
+        "Cincinnati, OH 45201",
+        "Orlando, FL 32801",
+        "Tampa, FL 33601",
+        "St. Louis, MO 63101",
+        "Minneapolis, MN 55401",
+        "New Orleans, LA 70112",
+        "Honolulu, HI 96801",
+        "Anchorage, AK 99501",
+        "Louisville, KY 40201",
+        "Richmond, VA 23218",
+        "Salt Lake City, UT 84101",
+        "Hartford, CT 06101",
+        "Buffalo, NY 14201",
+        "Rochester, NY 14601",
+        "Grand Rapids, MI 49501",
+        "Boise, ID 83701",
+        "Des Moines, IA 50301",
+        "Spokane, WA 99201",
+        "Albuquerque, NM 87101",
+        "Fresno, CA 93701",
+        "Tulsa, OK 74101",
+        "El Paso, TX 79901",
+        "Knoxville, TN 37901",
+        "Charleston, SC 29401",
+        "Savannah, GA 31401",
+        "Reno, NV 89501",
+        "Little Rock, AR 72201",
+        "Birmingham, AL 35201",
+        "Jackson, MS 39201",
+        "Lexington, KY 40501",
+        "Madison, WI 53701",
+        "Dayton, OH 45401",
+        "Greensboro, NC 27401",
+        "Lincoln, NE 68501",
+        "Chattanooga, TN 37401",
+        "Fort Wayne, IN 46801",
+        "Amarillo, TX 79101",
+        "Tallahassee, FL 32301",
+        "Topeka, KS 66601",
+        "Sioux Falls, SD 57101",
+        "Fargo, ND 58102",
+        "Cheyenne, WY 82001",
+        "Burlington, VT 05401",
+        "Santa Fe, NM 87501",
+        "Dover, DE 19901",
+        "Bismarck, ND 58501",
+        "Helena, MT 59601",
+        "Juneau, AK 99801",
+        "Annapolis, MD 21401",
+        "Trenton, NJ 08601",
+        "Olympia, WA 98501",
+        "Salem, OR 97301",
+        "Concord, NH 03301",
+        "Augusta, ME 04330",
+        "Montpelier, VT 05602",
+        "Harrisburg, PA 17101",
+        "Providence, RI 02901",
+        "Columbia, SC 29201",
+        "Pierre, SD 57501",
+        "Springfield, IL 62701",
+        "Jefferson City, MO 65101",
+        "Lansing, MI 48901",
+        "Frankfort, KY 40601",
+        "Carson City, NV 89701",
+        "Montgomery, AL 36101",
+        "Baton Rouge, LA 70801",
+        "Oklahoma City, OK 73101",
+        "Santa Barbara, CA 93101",
+        "Asheville, NC 28801",
+        "Boulder, CO 80301",
+        "Ann Arbor, MI 48104",
+        "Ithaca, NY 14850",
+    ];
+
+    let width = Unit::Inches(4.0);
+    let height = Unit::Inches(3.0);
+    let resolution = Resolution::Dpi203;
+
+    let engine = ZplEngine::new(zpl_template, width, height, resolution)
+        .expect("Failed to parse ZPL template");
+
+    let w_dots = width.to_dots(resolution) as f64;
+    let h_dots = height.to_dots(resolution) as f64;
+    let dpi = resolution.dpi();
+
+    println!("[multi_page_labels.pdf] Rendering {} pages...", total_pages);
+    let render_start = Instant::now();
+    let mut pages: Vec<Vec<u8>> = Vec::with_capacity(total_pages);
+
+    for i in 0..total_pages {
+        let mut vars = HashMap::new();
+        vars.insert("order_id".to_string(), format!("ORD-{}", 1001 + i));
+        vars.insert("name".to_string(), names[i % names.len()].to_string());
+        vars.insert(
+            "address".to_string(),
+            addresses[i % addresses.len()].to_string(),
+        );
+        vars.insert("city".to_string(), cities[i % cities.len()].to_string());
+        vars.insert("page".to_string(), format!("{}", i + 1));
+        vars.insert("total".to_string(), format!("{}", total_pages));
+
+        let png_bytes = engine
+            .render(PngBackend::new(), &vars)
+            .expect("Failed to render page");
+        pages.push(png_bytes);
+    }
+
+    let render_duration = render_start.elapsed();
+    println!(
+        "[multi_page_labels.pdf] All {} pages rendered in {:.2?} ({:.1} ms/page)",
+        total_pages,
+        render_duration,
+        render_duration.as_millis() as f64 / total_pages as f64
+    );
+
+    println!("[multi_page_labels.pdf] Merging into multi-page PDF...");
+    let merge_start = Instant::now();
+    let pdf_bytes =
+        merge_pages_to_pdf(&pages, w_dots, h_dots, dpi).expect("Failed to merge pages into PDF");
+    let merge_duration = merge_start.elapsed();
+
+    std::fs::write("examples/multi_page_labels.pdf", &pdf_bytes).expect("Failed to write PDF");
+
+    let total_duration = render_start.elapsed();
+    println!(
+        "[multi_page_labels.pdf] PDF merge took: {:.2?}",
+        merge_duration
+    );
+    println!(
+        "[multi_page_labels.pdf] Saved {} pages ({:.2} MB) | Total time: {:.2?}",
+        total_pages,
+        pdf_bytes.len() as f64 / (1024.0 * 1024.0),
+        total_duration
+    );
+}
+
 fn main() {
     println!("Rendering all showcase examples...");
     render_01();
@@ -470,5 +858,6 @@ fn main() {
     render_03();
     render_04();
     render_ifc_conditional();
+    render_multi_page_pdf();
     println!("All showcase examples rendered to examples/ directory!");
 }

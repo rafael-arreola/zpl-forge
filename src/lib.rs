@@ -7,7 +7,7 @@
 //! ## Core Features
 //! - **Robust Parsing**: Uses `nom` for fast and safe ZPL command parsing.
 //! - **State Machine**: Maintains label state (fonts, positions, barcodes) across commands.
-//! - **Multiple Backends**: Native support for PNG (via `imageproc`) and PDF (via `printpdf`).
+//! - **Multiple Backends**: Native support for PNG (via `imageproc`) and PDF (via `lopdf`).
 //! - **Extensible**: Includes custom commands for color support and Base64 image loading.
 //! - **Security**: Built-in OOM protection and safe arithmetic for coordinate calculations.
 //!

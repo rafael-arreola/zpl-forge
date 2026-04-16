@@ -14,7 +14,7 @@ authors = ["Rafael Arreola <rafael-arreola@outlook.com>"]
 exclude = ["examples/*", "tests/*", "docs/*", ".github/*", "*.png", "*.pdf"]
 
 [dependencies]
-printpdf = { version = "0.9.1", features = ["png"] }
+
 ab_glyph = "0.2.32"
 font-loader = "0.11.0"
 image = "0.25"
@@ -25,6 +25,9 @@ rxing = "0.8.5"
 tracing = "0.1"
 hex = "0.4.3"
 thiserror = "2.0"
+rayon = "1.12"
+lopdf = "0.40"
+flate2 = "1.1"
 
 [profile.release]
 lto = true
