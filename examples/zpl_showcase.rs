@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::time::Instant;
 use zpl_forge::{
     Resolution, Unit, ZplEngine, ZplForgeBackend,
-    forge::{pdf::PdfBackend, pdf::png_merge_pages_to_pdf, png::PngBackend},
+    forge::{
+        pdf::PdfBackend, pdf::png_merge_pages_to_pdf, pdf_native::PdfNativeBackend, png::PngBackend,
+    },
 };
 
 use rayon::prelude::*;
@@ -111,6 +113,13 @@ pub fn render_01() {
         PdfBackend::new(),
         "test_01.pdf",
     );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(6.0),
+        PdfNativeBackend::new(),
+        "test_01_native.pdf",
+    );
 }
 
 pub fn render_02() {
@@ -209,6 +218,20 @@ pub fn render_02() {
         PngBackend::new(),
         "test_02.png",
     );
+    run_test(
+        zpl_input,
+        Unit::Inches(2.0),
+        Unit::Inches(1.0),
+        PdfBackend::new(),
+        "test_02.pdf",
+    );
+    run_test(
+        zpl_input,
+        Unit::Inches(2.0),
+        Unit::Inches(1.0),
+        PdfNativeBackend::new(),
+        "test_02_native.pdf",
+    );
 }
 
 pub fn render_image() {
@@ -227,6 +250,20 @@ pub fn render_image() {
         Unit::Inches(6.0),
         PngBackend::new(),
         "test_image.png",
+    );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(6.0),
+        PdfBackend::new(),
+        "test_image.pdf",
+    );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(6.0),
+        PdfNativeBackend::new(),
+        "test_image_native.pdf",
     );
 }
 
@@ -247,6 +284,20 @@ pub fn render_image2() {
         PngBackend::new(),
         "test_image2.png",
     );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(6.0),
+        PdfBackend::new(),
+        "test_image2.pdf",
+    );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(6.0),
+        PdfNativeBackend::new(),
+        "test_image2_native.pdf",
+    );
 }
 
 pub fn render_image_color() {
@@ -262,6 +313,20 @@ pub fn render_image_color() {
         Unit::Inches(6.0),
         PngBackend::new(),
         "test_image_color.png",
+    );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(6.0),
+        PdfBackend::new(),
+        "test_image_color.pdf",
+    );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(6.0),
+        PdfNativeBackend::new(),
+        "test_image_color_native.pdf",
     );
 }
 
@@ -279,6 +344,20 @@ pub fn render_image_color2() {
         PngBackend::new(),
         "test_image_color2.png",
     );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(6.0),
+        PdfBackend::new(),
+        "test_image_color2.pdf",
+    );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(6.0),
+        PdfNativeBackend::new(),
+        "test_image_color2_native.pdf",
+    );
 }
 
 pub fn render_image_color3() {
@@ -295,6 +374,20 @@ pub fn render_image_color3() {
         PngBackend::new(),
         "test_image_color3.png",
     );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(6.0),
+        PdfBackend::new(),
+        "test_image_color3.pdf",
+    );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(6.0),
+        PdfNativeBackend::new(),
+        "test_image_color3_native.pdf",
+    );
 }
 
 pub fn render_image_color4() {
@@ -310,6 +403,20 @@ pub fn render_image_color4() {
         Unit::Inches(6.0),
         PngBackend::new(),
         "test_image_color4.png",
+    );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(6.0),
+        PdfBackend::new(),
+        "test_image_color4.pdf",
+    );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(6.0),
+        PdfNativeBackend::new(),
+        "test_image_color4_native.pdf",
     );
 }
 
@@ -379,6 +486,20 @@ pub fn render_03() {
         PngBackend::new(),
         "test_03.png",
     );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(6.0),
+        PdfBackend::new(),
+        "test_03.pdf",
+    );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(6.0),
+        PdfNativeBackend::new(),
+        "test_03_native.pdf",
+    );
 }
 
 pub fn render_04() {
@@ -411,6 +532,20 @@ pub fn render_04() {
         PngBackend::new(),
         "test_04.png",
     );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(8.0),
+        PdfBackend::new(),
+        "test_04.pdf",
+    );
+    run_test(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(8.0),
+        PdfNativeBackend::new(),
+        "test_04_native.pdf",
+    );
 }
 
 pub fn render_ifc_conditional() {
@@ -442,6 +577,14 @@ pub fn render_ifc_conditional() {
         "test_ifc_false.png",
         &vars_false,
     );
+    run_test_with_vars(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(4.0),
+        PdfNativeBackend::new(),
+        "test_ifc_false_native.pdf",
+        &vars_false,
+    );
 
     // Test 2: true (Variables match)
     // Both the text and the box should appear.
@@ -455,6 +598,14 @@ pub fn render_ifc_conditional() {
         Unit::Inches(4.0),
         PngBackend::new(),
         "test_ifc_true.png",
+        &vars_true,
+    );
+    run_test_with_vars(
+        zpl_input,
+        Unit::Inches(4.0),
+        Unit::Inches(4.0),
+        PdfNativeBackend::new(),
+        "test_ifc_true_native.pdf",
         &vars_true,
     );
 }
