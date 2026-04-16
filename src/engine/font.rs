@@ -2,7 +2,10 @@ use std::collections::HashMap;
 
 use crate::{ZplError, ZplResult};
 use ab_glyph::FontArc;
-use font_loader::system_fonts;
+
+/// Default fallback font bytes embedded in the binary.
+/// This guarantees the library runs on any OS/Platform without C dependencies.
+const DEFAULT_FONT_BYTES: &[u8] = include_bytes!("../assets/OpenSans-Regular.ttf");
 
 /// List of valid ZPL font identifiers (A-Z and 0-9).
 const FONT_MAP: &[char] = &[
@@ -23,33 +26,19 @@ pub struct FontManager {
 }
 
 impl Default for FontManager {
-    /// Creates a `FontManager` with a default system font registered for all identifiers.
+    /// Creates a `FontManager` with a lightweight open-source default font
+    /// registered for all identifiers ('A' to '9').
     ///
-    /// It attempts to load common sans-serif fonts available on the system.
+    /// Uses Open Sans (SIL Open Font License) embedded directly in the binary,
+    /// ensuring zero native dependencies on the host OS.
     fn default() -> Self {
         let mut current = Self {
             font_map: HashMap::new(),
             font_index: HashMap::new(),
         };
 
-        let families = [
-            "Swiss 721",
-            "Helvetica",
-            "Roboto",
-            "Liberation Sans",
-            "DejaVu Sans",
-            "Arial",
-        ];
-
-        for family in families {
-            let prop = system_fonts::FontPropertyBuilder::new()
-                .family(family)
-                .build();
-            if let Some((data, _)) = system_fonts::get(&prop) {
-                let _ = current.register_font(family, &data, 'A', '9');
-                break;
-            }
-        }
+        // Register the embedded font for all alphanumeric ZPL identifiers
+        let _ = current.register_font("OpenSans", DEFAULT_FONT_BYTES, 'A', '9');
 
         current
     }
