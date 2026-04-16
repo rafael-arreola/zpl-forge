@@ -1,7 +1,7 @@
 use super::{common, state};
+use crate::ZplResult;
 use crate::ast::cmd;
 use crate::tools;
-use crate::ZplResult;
 
 /// A builder that converts a sequence of AST commands into renderable instructions.
 ///

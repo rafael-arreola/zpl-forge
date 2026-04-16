@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::{
+    FontManager, ZplError, ZplResult,
     ast::parse_zpl,
     engine::{backend, common, font, intr},
-    FontManager, ZplError, ZplResult,
 };
 
 /// The main entry point for processing and rendering ZPL labels.

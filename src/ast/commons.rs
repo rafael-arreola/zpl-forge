@@ -85,11 +85,7 @@ impl From<YesNo> for char {
 
 impl From<bool> for YesNo {
     fn from(value: bool) -> Self {
-        if value {
-            YesNo::Y
-        } else {
-            YesNo::N
-        }
+        if value { YesNo::Y } else { YesNo::N }
     }
 }
 

@@ -2,12 +2,12 @@ use crate::engine::{FontManager, ZplForgeBackend};
 use crate::forge::png::PngBackend;
 use crate::{ZplError, ZplResult};
 
-use flate2::write::ZlibEncoder;
 use flate2::Compression;
-use image::codecs::png::PngDecoder;
+use flate2::write::ZlibEncoder;
 use image::ImageDecoder;
+use image::codecs::png::PngDecoder;
 use lopdf::content::{Content, Operation};
-use lopdf::{dictionary, Document, Object, Stream};
+use lopdf::{Document, Object, Stream, dictionary};
 use rayon::prelude::*;
 use std::io::{BufWriter, Write};
 

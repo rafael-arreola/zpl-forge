@@ -1,10 +1,10 @@
 use nom::{
+    Parser,
     bytes::complete::{tag, take_till},
     combinator::{cut, map_res},
-    Parser,
 };
 
-use super::{param, parse_u32, Res, Span};
+use super::{Res, Span, param, parse_u32};
 use crate::ast::cmd;
 
 /// ^GIC - Custom Image Color

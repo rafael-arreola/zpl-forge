@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::time::Instant;
 use zpl_forge::{
-    forge::{pdf::png_merge_pages_to_pdf, pdf::PdfBackend, png::PngBackend},
     Resolution, Unit, ZplEngine, ZplForgeBackend,
+    forge::{pdf::PdfBackend, pdf::png_merge_pages_to_pdf, png::PngBackend},
 };
 
 fn run_test<B>(zpl: &str, width: Unit, height: Unit, backend: B, name: &str)

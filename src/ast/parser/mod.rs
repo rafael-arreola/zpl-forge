@@ -1,4 +1,5 @@
 use nom::{
+    IResult, Parser,
     branch::alt,
     bytes::complete::{tag, take, take_till},
     character::complete::{digit1, multispace0, none_of},
@@ -6,7 +7,6 @@ use nom::{
     error::Error,
     multi::many0,
     sequence::delimited,
-    IResult, Parser,
 };
 
 use crate::ast::cmd;

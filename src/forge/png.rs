@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use ab_glyph::{Font, PxScale, ScaleFont};
-use base64::{engine::general_purpose, Engine as _};
-use image::{imageops::overlay, ImageBuffer, Rgb, RgbImage};
+use base64::{Engine as _, engine::general_purpose};
+use image::{ImageBuffer, Rgb, RgbImage, imageops::overlay};
 use imageproc::drawing::{
     draw_filled_circle_mut, draw_filled_ellipse_mut, draw_filled_rect_mut, draw_text_mut,
 };
