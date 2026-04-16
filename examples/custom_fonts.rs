@@ -62,7 +62,8 @@ fn main() -> zpl_forge::ZplResult<()> {
     let png_backend = PngBackend::new();
     let png_bytes = engine.render(png_backend, &HashMap::new())?;
 
-    std::fs::write("examples/custom_fonts_output.png", png_bytes).expect("Failed to write output image");
+    std::fs::write("examples/custom_fonts_output.png", png_bytes)
+        .expect("Failed to write output image");
     println!("Successfully rendered to examples/custom_fonts_output.png");
 
     Ok(())

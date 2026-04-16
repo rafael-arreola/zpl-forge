@@ -415,13 +415,13 @@ pub fn render_ifc_conditional() {
     let zpl_input = r#"
         ^XA
         ^FO50,50^A0N,50,50^FDAlways Visible^FS
-        
+
         ^FX This should only be visible if user_type == admin
         ^FO50,150^IFCuser_type,admin^A0N,50,50^FDAdmin Only Field^FS
-        
+
         ^FX This should only be visible if show_box == true
         ^FO50,250^IFCshow_box,true^GB200,50,5^FS
-        
+
         ^FO50,350^A0N,50,50^FDBottom Text^FS
         ^XZ
     "#;
@@ -431,7 +431,7 @@ pub fn render_ifc_conditional() {
     let mut vars_false = HashMap::new();
     vars_false.insert("user_type".to_string(), "guest".to_string());
     vars_false.insert("show_box".to_string(), "false".to_string());
-    
+
     run_test_with_vars(
         zpl_input,
         Unit::Inches(4.0),
@@ -456,7 +456,6 @@ pub fn render_ifc_conditional() {
         &vars_true,
     );
 }
-
 
 fn main() {
     println!("Rendering all showcase examples...");
