@@ -5,7 +5,7 @@ use ab_glyph::FontArc;
 
 /// Default fallback font bytes embedded in the binary.
 /// This guarantees the library runs on any OS/Platform without C dependencies.
-const DEFAULT_FONT_BYTES: &[u8] = include_bytes!("../assets/Oswald-Regular.ttf");
+const DEFAULT_FONT_BYTES: &[u8] = include_bytes!("../../assets/Oswald-Regular.ttf");
 
 /// List of valid ZPL font identifiers (A-Z and 0-9).
 const FONT_MAP: &[char] = &[

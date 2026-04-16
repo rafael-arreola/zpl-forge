@@ -1113,7 +1113,7 @@ impl ZplForgeBackend for PdfNativeBackend {
         let pages_id = doc.new_object_id();
 
         // ── embed fonts ────────────────────────────────────────────
-        let default_font_bytes: &[u8] = include_bytes!("../assets/Oswald-Regular.ttf");
+        let default_font_bytes: &[u8] = include_bytes!("../../assets/Oswald-Regular.ttf");
         let mut font_dict = lopdf::Dictionary::new();
         let mut embedded_fonts: HashSet<String> = HashSet::new();
 
