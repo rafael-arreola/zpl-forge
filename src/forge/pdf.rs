@@ -21,6 +21,7 @@ pub struct PdfBackend {
     width_dots: f64,
     height_dots: f64,
     resolution: f32,
+    compression: Compression,
 }
 
 impl Default for PdfBackend {
@@ -30,13 +31,25 @@ impl Default for PdfBackend {
 }
 
 impl PdfBackend {
-    /// Creates a new `PdfBackend` instance.
+    /// Sets the zlib compression level for the PDF output.
+    ///
+    /// This is a builder method. The default level is [`Compression::default()`].
+    pub fn with_compression(mut self, compression: Compression) -> Self {
+        self.compression = compression;
+        self
+    }
+
+    /// Creates a new `PdfBackend` instance with default settings.
+    ///
+    /// The label is first rendered as a PNG via [`PngBackend`], then embedded
+    /// into a single-page PDF. Zlib compression defaults to [`Compression::default()`].
     pub fn new() -> Self {
         Self {
             png_backend: PngBackend::new(),
             width_dots: 0.0,
             height_dots: 0.0,
             resolution: 0.0,
+            compression: Compression::default(),
         }
     }
 }
@@ -44,7 +57,10 @@ impl PdfBackend {
 /// Decodes a PNG buffer into zlib-compressed RGB pixels, returning (compressed_bytes, width, height).
 type PreparedPage = (Vec<u8>, u32, u32);
 
-fn decode_and_compress_png(png_data: &[u8]) -> Result<PreparedPage, String> {
+fn decode_and_compress_png(
+    png_data: &[u8],
+    compression: Compression,
+) -> Result<PreparedPage, String> {
     let decoder = PngDecoder::new(std::io::Cursor::new(png_data))
         .map_err(|e| format!("Failed to create PNG decoder: {}", e))?;
     let (w, h) = decoder.dimensions();
@@ -71,7 +87,7 @@ fn decode_and_compress_png(png_data: &[u8]) -> Result<PreparedPage, String> {
         raw_buf
     };
 
-    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    let mut encoder = ZlibEncoder::new(Vec::new(), compression);
     encoder
         .write_all(&rgb_buf)
         .map_err(|e| format!("Failed to compress: {}", e))?;
@@ -187,19 +203,21 @@ fn build_pdf(
 /// * `width_dots` - The width of each page in dots.
 /// * `height_dots` - The height of each page in dots.
 /// * `dpi` - The resolution in dots per inch.
+/// * `compression` - The zlib compression level applied to the raw pixel data before embedding.
 ///
 /// # Example
 /// ```rust,no_run
 /// use zpl_forge::forge::pdf::png_merge_pages_to_pdf;
 /// let png1_bytes: Vec<u8> = vec![]; // PNG bytes from PngBackend
 /// let png2_bytes: Vec<u8> = vec![]; // PNG bytes from PngBackend
-/// let pdf_bytes = png_merge_pages_to_pdf(&[png1_bytes, png2_bytes], 812.0, 406.0, 203.2).unwrap();
+/// let pdf_bytes = png_merge_pages_to_pdf(&[png1_bytes, png2_bytes], 812.0, 406.0, 203.2, flate2::Compression::default()).unwrap();
 /// ```
 pub fn png_merge_pages_to_pdf(
     pages: &[Vec<u8>],
     width_dots: f64,
     height_dots: f64,
     dpi: f32,
+    compression: Compression,
 ) -> ZplResult<Vec<u8>> {
     if pages.is_empty() {
         return Err(ZplError::BackendError("No pages to merge".to_string()));
@@ -212,7 +230,7 @@ pub fn png_merge_pages_to_pdf(
     // Parallel: decode PNGs and compress to zlib (one thread per CPU core)
     let prepared: Vec<Result<PreparedPage, String>> = pages
         .par_iter()
-        .map(|png_data| decode_and_compress_png(png_data))
+        .map(|png_data| decode_and_compress_png(png_data, compression))
         .collect();
 
     // Check for errors
@@ -246,7 +264,7 @@ impl ZplForgeBackend for PdfBackend {
         font: char,
         height: Option<u32>,
         width: Option<u32>,
-        text: String,
+        text: &str,
         reverse_print: bool,
         color: Option<String>,
     ) -> ZplResult<()> {
@@ -329,7 +347,7 @@ impl ZplForgeBackend for PdfBackend {
         y: u32,
         width: u32,
         height: u32,
-        data: Vec<u8>,
+        data: &[u8],
         reverse_print: bool,
     ) -> ZplResult<()> {
         self.png_backend
@@ -342,7 +360,7 @@ impl ZplForgeBackend for PdfBackend {
         y: u32,
         width: u32,
         height: u32,
-        data: String,
+        data: &str,
     ) -> ZplResult<()> {
         self.png_backend
             .draw_graphic_image_custom(x, y, width, height, data)
@@ -359,7 +377,7 @@ impl ZplForgeBackend for PdfBackend {
         interpretation_line_above: char,
         check_digit: char,
         mode: char,
-        data: String,
+        data: &str,
         reverse_print: bool,
     ) -> ZplResult<()> {
         self.png_backend.draw_code128(
@@ -386,7 +404,7 @@ impl ZplForgeBackend for PdfBackend {
         magnification: u32,
         error_correction: char,
         mask: u32,
-        data: String,
+        data: &str,
         reverse_print: bool,
     ) -> ZplResult<()> {
         self.png_backend.draw_qr_code(
@@ -412,7 +430,7 @@ impl ZplForgeBackend for PdfBackend {
         module_width: u32,
         interpretation_line: char,
         interpretation_line_above: char,
-        data: String,
+        data: &str,
         reverse_print: bool,
     ) -> ZplResult<()> {
         self.png_backend.draw_code39(
@@ -436,6 +454,7 @@ impl ZplForgeBackend for PdfBackend {
             self.width_dots,
             self.height_dots,
             self.resolution,
+            self.compression,
         )
     }
 }

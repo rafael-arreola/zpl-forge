@@ -30,25 +30,24 @@ impl ZplInstructionBuilder {
     /// or if data conversion fails.
     pub fn build(mut self) -> ZplResult<Vec<common::ZplInstruction>> {
         let mut instructions = Vec::new();
-        let commands = self.commands.clone();
 
-        for command in &commands {
+        for command in self.commands {
             match command {
                 cmd::Command::FieldOrigin { x, y } => {
                     if let Some(x) = x {
-                        self.state.position.x = *x;
+                        self.state.position.x = x;
                     }
                     if let Some(y) = y {
-                        self.state.position.y = *y;
+                        self.state.position.y = y;
                     }
                 }
 
                 cmd::Command::FieldTypeset { x, y } => {
                     if let Some(x) = x {
-                        self.state.typeset.x = self.state.typeset.x.saturating_add(*x);
+                        self.state.typeset.x = self.state.typeset.x.saturating_add(x);
                     }
                     if let Some(y) = y {
-                        self.state.typeset.y = self.state.typeset.y.saturating_add(*y);
+                        self.state.typeset.y = self.state.typeset.y.saturating_add(y);
                     }
                 }
 
@@ -61,12 +60,12 @@ impl ZplInstructionBuilder {
                     height,
                     width,
                 } => {
-                    self.state.font.font_name = *font_name;
+                    self.state.font.font_name = font_name;
                     if let Some(h) = height {
-                        self.state.font.height = Some(*h);
+                        self.state.font.height = Some(h);
                     }
                     if let Some(w) = width {
-                        self.state.font.width = Some(*w);
+                        self.state.font.width = Some(w);
                     }
                 }
 
@@ -76,20 +75,20 @@ impl ZplInstructionBuilder {
                     height,
                     width,
                 } => {
-                    self.state.font.font_name = *font_name;
+                    self.state.font.font_name = font_name;
                     if let Some(o) = orientation {
-                        self.state.font.orientation = Some(*o);
+                        self.state.font.orientation = Some(o);
                     }
                     if let Some(h) = height {
-                        self.state.font.height = Some(*h);
+                        self.state.font.height = Some(h);
                     }
                     if let Some(w) = width {
-                        self.state.font.width = Some(*w);
+                        self.state.font.width = Some(w);
                     }
                 }
 
                 cmd::Command::FieldData { data } => {
-                    self.state.value = Some(data.clone());
+                    self.state.value = Some(data);
                 }
 
                 cmd::Command::GraphicBox {
@@ -99,10 +98,10 @@ impl ZplInstructionBuilder {
                     line_color,
                     corner_rounding,
                 } => {
-                    self.state.metrics.width = *width;
-                    self.state.metrics.height = *height;
+                    self.state.metrics.width = width;
+                    self.state.metrics.height = height;
                     self.state.metrics.thickness = border_thickness.unwrap_or(1);
-                    self.state.attributes.line_color = *line_color;
+                    self.state.attributes.line_color = line_color;
                     self.state.params.rounding = corner_rounding.unwrap_or(0);
                     self.state.instruction_type = Some(state::ZplInstructionType::GraphicBox);
                 }
@@ -114,7 +113,7 @@ impl ZplInstructionBuilder {
                 } => {
                     self.state.metrics.width = diameter.unwrap_or(0);
                     self.state.metrics.thickness = border_thickness.unwrap_or(1);
-                    self.state.attributes.line_color = *line_color;
+                    self.state.attributes.line_color = line_color;
                     self.state.instruction_type = Some(state::ZplInstructionType::GraphicCircle);
                 }
 
@@ -127,16 +126,16 @@ impl ZplInstructionBuilder {
                     self.state.metrics.width = width.unwrap_or(0);
                     self.state.metrics.height = height.unwrap_or(0);
                     self.state.metrics.thickness = border_thickness.unwrap_or(1);
-                    self.state.attributes.line_color = *line_color;
+                    self.state.attributes.line_color = line_color;
                     self.state.instruction_type = Some(state::ZplInstructionType::GraphicEllipse);
                 }
 
                 cmd::Command::GraphicTextColor { color } => {
-                    self.state.font.color = Some(color.clone());
+                    self.state.font.color = Some(color);
                 }
 
                 cmd::Command::GraphicLineColor { color } => {
-                    self.state.attributes.custom_line_color = Some(color.clone());
+                    self.state.attributes.custom_line_color = Some(color);
                 }
 
                 cmd::Command::GraphicField {
@@ -150,7 +149,7 @@ impl ZplInstructionBuilder {
                     let bytes: Vec<u8> = match compression_type {
                         'A' => {
                             let bpr_val = bytes_per_row.unwrap_or(0) as usize;
-                            tools::zpl_decode(data, bpr_val)
+                            tools::zpl_decode(&data, bpr_val)
                         }
                         'B' => {
                             // method not implemented
@@ -173,7 +172,7 @@ impl ZplInstructionBuilder {
                     if let Some(bpr) = bytes_per_row {
                         self.state.metrics.width = bpr.saturating_mul(8);
                         if let Some(total) = graphic_field_count
-                            && *bpr > 0
+                            && bpr > 0
                         {
                             self.state.metrics.height = total / bpr;
                         }
@@ -189,13 +188,13 @@ impl ZplInstructionBuilder {
                     height,
                 } => {
                     if let Some(w) = module_width {
-                        self.state.barcode_metrics.thickness = *w;
+                        self.state.barcode_metrics.thickness = w;
                     }
                     if let Some(h) = height {
-                        self.state.barcode_metrics.height = *h;
+                        self.state.barcode_metrics.height = h;
                     }
                     if let Some(r) = ratio {
-                        self.state.params.ratio = Some(*r as f64);
+                        self.state.params.ratio = Some(r as f64);
                     }
                 }
 
@@ -207,7 +206,7 @@ impl ZplInstructionBuilder {
                     check_digit,
                     mode,
                 } => {
-                    self.state.attributes.orientation = *orientation;
+                    self.state.attributes.orientation = orientation;
                     // Use command height OR default barcode height OR 10
                     self.state.metrics.height =
                         height.unwrap_or(if self.state.barcode_metrics.height > 0 {
@@ -215,10 +214,10 @@ impl ZplInstructionBuilder {
                         } else {
                             10
                         });
-                    self.state.attributes.interpretation_line = *interpretation_line;
-                    self.state.attributes.interpretation_above = *interpretation_line_above;
-                    self.state.attributes.check_digit = *check_digit;
-                    self.state.attributes.mode = *mode;
+                    self.state.attributes.interpretation_line = interpretation_line;
+                    self.state.attributes.interpretation_above = interpretation_line_above;
+                    self.state.attributes.check_digit = check_digit;
+                    self.state.attributes.mode = mode;
                     self.state.instruction_type = Some(state::ZplInstructionType::Code128);
                 }
 
@@ -229,16 +228,16 @@ impl ZplInstructionBuilder {
                     interpretation_line,
                     interpretation_line_above,
                 } => {
-                    self.state.attributes.orientation = *orientation;
-                    self.state.attributes.check_digit = *check_digit;
+                    self.state.attributes.orientation = orientation;
+                    self.state.attributes.check_digit = check_digit;
                     self.state.metrics.height =
                         height.unwrap_or(if self.state.barcode_metrics.height > 0 {
                             self.state.barcode_metrics.height
                         } else {
                             10
                         });
-                    self.state.attributes.interpretation_line = *interpretation_line;
-                    self.state.attributes.interpretation_above = *interpretation_line_above;
+                    self.state.attributes.interpretation_line = interpretation_line;
+                    self.state.attributes.interpretation_above = interpretation_line_above;
                     self.state.instruction_type = Some(state::ZplInstructionType::Code39);
                 }
 
@@ -249,7 +248,7 @@ impl ZplInstructionBuilder {
                     error_correction,
                     mask,
                 } => {
-                    self.state.attributes.orientation = *orientation;
+                    self.state.attributes.orientation = orientation;
                     self.state.params.model = model.unwrap_or(2);
                     self.state.metrics.thickness =
                         magnification.unwrap_or(if self.state.barcode_metrics.thickness > 0 {
@@ -257,7 +256,7 @@ impl ZplInstructionBuilder {
                         } else {
                             2
                         });
-                    self.state.attributes.error_correction = *error_correction;
+                    self.state.attributes.error_correction = error_correction;
                     self.state.params.mask = mask.unwrap_or(7);
                     self.state.instruction_type = Some(state::ZplInstructionType::QRCode);
                 }
@@ -267,22 +266,23 @@ impl ZplInstructionBuilder {
                     height,
                     data,
                 } => {
-                    self.state.metrics.width = *width;
-                    self.state.metrics.height = *height;
-                    self.state.value = Some(data.clone());
+                    self.state.metrics.width = width;
+                    self.state.metrics.height = height;
+                    self.state.value = Some(data);
                     self.state.instruction_type = Some(state::ZplInstructionType::CustomImage);
                 }
 
                 cmd::Command::IfCondition { variable, value } => {
-                    self.state.condition = Some((variable.clone(), value.clone()));
+                    self.state.condition = Some((variable, value));
                 }
 
                 // Apply the instruction with the current state
                 cmd::Command::FieldSeparator => {
                     let x = self.state.position.x;
                     let y = self.state.position.y;
-                    let data = self.state.value.clone().unwrap_or_default();
+                    let data = self.state.value.take().unwrap_or_default();
                     let reverse_print = self.state.reverse;
+                    let condition = self.state.condition.take();
 
                     if let Some(instr_type) = &self.state.instruction_type {
                         match instr_type {
@@ -297,7 +297,7 @@ impl ZplInstructionBuilder {
                                     custom_color: self.state.attributes.custom_line_color.clone(),
                                     rounding: self.state.params.rounding,
                                     reverse_print,
-                                    condition: self.state.condition.clone(),
+                                    condition: condition.clone(),
                                 });
                             }
                             state::ZplInstructionType::GraphicCircle => {
@@ -309,7 +309,7 @@ impl ZplInstructionBuilder {
                                     color: self.state.attributes.line_color.unwrap_or('B'),
                                     custom_color: self.state.attributes.custom_line_color.clone(),
                                     reverse_print,
-                                    condition: self.state.condition.clone(),
+                                    condition: condition.clone(),
                                 });
                             }
                             state::ZplInstructionType::GraphicEllipse => {
@@ -322,19 +322,19 @@ impl ZplInstructionBuilder {
                                     color: self.state.attributes.line_color.unwrap_or('B'),
                                     custom_color: self.state.attributes.custom_line_color.clone(),
                                     reverse_print,
-                                    condition: self.state.condition.clone(),
+                                    condition: condition.clone(),
                                 });
                             }
                             state::ZplInstructionType::GraphicField => {
-                                if let Some(g_data) = &self.state.graphic_data {
+                                if let Some(g_data) = self.state.graphic_data.take() {
                                     instructions.push(common::ZplInstruction::GraphicField {
                                         x,
                                         y,
                                         width: self.state.metrics.width,
                                         height: self.state.metrics.height,
-                                        data: g_data.clone(),
+                                        data: g_data,
                                         reverse_print,
-                                        condition: self.state.condition.clone(),
+                                        condition: condition.clone(),
                                     });
                                 }
                             }
@@ -345,7 +345,7 @@ impl ZplInstructionBuilder {
                                     width: self.state.metrics.width,
                                     height: self.state.metrics.height,
                                     data: data.clone(),
-                                    condition: self.state.condition.clone(),
+                                    condition: condition.clone(),
                                 });
                             }
                             state::ZplInstructionType::Code128 => {
@@ -373,7 +373,7 @@ impl ZplInstructionBuilder {
                                     mode: self.state.attributes.mode.unwrap_or('N'),
                                     data: data.clone(),
                                     reverse_print,
-                                    condition: self.state.condition.clone(),
+                                    condition: condition.clone(),
                                 });
                             }
                             state::ZplInstructionType::Code39 => {
@@ -400,7 +400,7 @@ impl ZplInstructionBuilder {
                                         .unwrap_or('N'),
                                     data: data.clone(),
                                     reverse_print,
-                                    condition: self.state.condition.clone(),
+                                    condition: condition.clone(),
                                 });
                             }
                             state::ZplInstructionType::QRCode => {
@@ -418,7 +418,7 @@ impl ZplInstructionBuilder {
                                     mask: self.state.params.mask,
                                     data: data.clone(),
                                     reverse_print,
-                                    condition: self.state.condition.clone(),
+                                    condition: condition.clone(),
                                 });
                             }
                             state::ZplInstructionType::Text => {
@@ -431,29 +431,26 @@ impl ZplInstructionBuilder {
                                     text: data.clone(),
                                     reverse_print,
                                     color: self.state.font.color.clone(),
-                                    condition: self.state.condition.clone(),
+                                    condition: condition.clone(),
                                 });
                             }
                         }
-                    } else if let Some(text) = &self.state.value {
+                    } else if !data.is_empty() {
                         instructions.push(common::ZplInstruction::Text {
                             x,
                             y,
                             font: self.state.font.font_name,
                             height: self.state.font.height,
                             width: self.state.font.width,
-                            text: text.clone(),
+                            text: data.clone(),
                             reverse_print,
                             color: self.state.font.color.clone(),
-                            condition: self.state.condition.clone(),
+                            condition,
                         });
                     }
 
-                    self.state.value = None;
                     self.state.instruction_type = None;
-                    self.state.graphic_data = None;
                     self.state.reverse = false;
-                    self.state.condition = None;
                 }
 
                 _ => {}

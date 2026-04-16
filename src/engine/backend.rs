@@ -20,7 +20,7 @@ pub trait ZplForgeBackend {
         font: char,
         height: Option<u32>,
         width: Option<u32>,
-        text: String,
+        text: &str,
         reverse_print: bool,
         color: Option<String>,
     ) -> ZplResult<()>;
@@ -71,7 +71,7 @@ pub trait ZplForgeBackend {
         y: u32,
         width: u32,
         height: u32,
-        data: Vec<u8>,
+        data: &[u8],
         reverse_print: bool,
     ) -> ZplResult<()>;
 
@@ -85,7 +85,7 @@ pub trait ZplForgeBackend {
         y: u32,
         width: u32,
         height: u32,
-        data: String,
+        data: &str,
     ) -> ZplResult<()>;
 
     /// Draws a Code 128 barcode.
@@ -100,7 +100,7 @@ pub trait ZplForgeBackend {
         interpretation_line_above: char,
         check_digit: char,
         mode: char,
-        data: String,
+        data: &str,
         reverse_print: bool,
     ) -> ZplResult<()>;
 
@@ -114,7 +114,7 @@ pub trait ZplForgeBackend {
         magnification: u32,
         error_correction: char,
         mask: u32,
-        data: String,
+        data: &str,
         reverse_print: bool,
     ) -> ZplResult<()>;
 
@@ -129,7 +129,7 @@ pub trait ZplForgeBackend {
         module_width: u32,
         interpretation_line: char,
         interpretation_line_above: char,
-        data: String,
+        data: &str,
         reverse_print: bool,
     ) -> ZplResult<()>;
 

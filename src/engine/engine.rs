@@ -81,11 +81,38 @@ impl ZplEngine {
             if variables.is_empty() || !s.contains("{{") {
                 return std::borrow::Cow::Borrowed(s);
             }
-            let mut result = s.to_string();
-            for (k, v) in variables {
-                result = result.replace(&format!("{{{{{}}}}}", k), v);
+
+            let mut result = String::new();
+            let mut last_pos = 0;
+            let mut found = false;
+            let mut cursor = 0;
+
+            while let Some(start_offset) = s[cursor..].find("{{") {
+                let start = cursor + start_offset;
+                if let Some(end_offset) = s[start + 2..].find("}}") {
+                    let end = start + 2 + end_offset;
+                    let key = &s[start + 2..end];
+                    if let Some(value) = variables.get(key) {
+                        if !found {
+                            result.reserve(s.len());
+                            found = true;
+                        }
+                        result.push_str(&s[last_pos..start]);
+                        result.push_str(value);
+                        last_pos = end + 2;
+                        cursor = last_pos;
+                        continue;
+                    }
+                }
+                cursor = start + 2;
             }
-            std::borrow::Cow::Owned(result)
+
+            if found {
+                result.push_str(&s[last_pos..]);
+                std::borrow::Cow::Owned(result)
+            } else {
+                std::borrow::Cow::Borrowed(s)
+            }
         }
 
         let w_dots = self.width.clone().to_dots(self.resolution);
@@ -134,7 +161,7 @@ impl ZplEngine {
                         *font,
                         *height,
                         *width,
-                        replace_vars(text, variables).into_owned(),
+                        &replace_vars(text, variables),
                         *reverse_print,
                         color.clone(),
                     )?;
@@ -214,14 +241,7 @@ impl ZplEngine {
                     data,
                     reverse_print,
                 } => {
-                    backend.draw_graphic_field(
-                        *x,
-                        *y,
-                        *width,
-                        *height,
-                        data.clone(),
-                        *reverse_print,
-                    )?;
+                    backend.draw_graphic_field(*x, *y, *width, *height, data, *reverse_print)?;
                 }
                 common::ZplInstruction::Code128 {
                     condition: _,
@@ -247,7 +267,7 @@ impl ZplEngine {
                         *interpretation_line_above,
                         *check_digit,
                         *mode,
-                        replace_vars(data, variables).into_owned(),
+                        &replace_vars(data, variables),
                         *reverse_print,
                     )?;
                 }
@@ -271,7 +291,7 @@ impl ZplEngine {
                         *magnification,
                         *error_correction,
                         *mask,
-                        replace_vars(data, variables).into_owned(),
+                        &replace_vars(data, variables),
                         *reverse_print,
                     )?;
                 }
@@ -297,7 +317,7 @@ impl ZplEngine {
                         *module_width,
                         *interpretation_line,
                         *interpretation_line_above,
-                        replace_vars(data, variables).into_owned(),
+                        &replace_vars(data, variables),
                         *reverse_print,
                     )?;
                 }
@@ -309,7 +329,7 @@ impl ZplEngine {
                     height,
                     data,
                 } => {
-                    backend.draw_graphic_image_custom(*x, *y, *width, *height, data.clone())?;
+                    backend.draw_graphic_image_custom(*x, *y, *width, *height, data)?;
                 }
             }
         }

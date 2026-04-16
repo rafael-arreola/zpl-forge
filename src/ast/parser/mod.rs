@@ -18,6 +18,17 @@ pub mod standard;
 pub type Span<'a> = &'a str;
 pub type Res<'a, T> = IResult<Span<'a>, T, Error<Span<'a>>>;
 
+/// Parses a complete ZPL input string into a vector of [`Command`](cmd::Command) AST nodes.
+///
+/// Uses `nom::combinator::all_consuming` to ensure the entire input is consumed.
+/// Returns a [`ZplError::ParseError`] with line information on failure, or
+/// [`ZplError::EmptyInput`] on incomplete input.
+///
+/// # Arguments
+/// * `input` - A full ZPL document string (e.g., `^XA...^XZ`).
+///
+/// # Returns
+/// A `ZplResult<Vec<cmd::Command>>` with the ordered list of parsed commands.
 pub fn parse_zpl(input: &str) -> ZplResult<Vec<cmd::Command>> {
     let mut parser = all_consuming(many0(delimited(
         multispace0,
@@ -76,6 +87,10 @@ pub fn parse_zpl(input: &str) -> ZplResult<Vec<cmd::Command>> {
     }
 }
 
+/// Parses any unrecognized ZPL command starting with `^` followed by a 2-character code.
+///
+/// Captures the command code and all trailing arguments up to the next `^`.
+/// Returns [`Command::UnsupportedCommand`](cmd::Command::UnsupportedCommand).
 pub fn cmd_unsupported(input: Span) -> Res<cmd::Command> {
     let (input, _) = tag("^").parse(input)?;
     let (input, command_code) = take(2usize).parse(input)?;
@@ -89,14 +104,19 @@ pub fn cmd_unsupported(input: Span) -> Res<cmd::Command> {
     ))
 }
 
+/// Parses a single character that is not a comma, caret, whitespace, or newline.
+///
+/// Used to extract single-character parameters (e.g., orientation, font name) from ZPL fields.
 pub fn parse_char(input: Span) -> Res<char> {
     none_of(",^\r\n \t").parse(input)
 }
 
+/// Parses an unsigned 32-bit integer from decimal digit characters.
 pub fn parse_u32(input: Span) -> Res<u32> {
     map_res(digit1, |s: Span| s.parse::<u32>()).parse(input)
 }
 
+/// Parses a 32-bit floating-point number, accepting both integer and decimal forms (e.g., `3` or `2.5`).
 pub fn parse_f32(input: Span) -> Res<f32> {
     map_res(recognize((digit1, opt((tag("."), digit1)))), |s: Span| {
         s.parse::<f32>()
@@ -104,6 +124,10 @@ pub fn parse_f32(input: Span) -> Res<f32> {
     .parse(input)
 }
 
+/// Wraps a parser to make its parameter optional without requiring a leading comma.
+///
+/// Returns `None` if the input is empty or starts with `,` or `^` (i.e., the parameter was omitted).
+/// Otherwise, applies the inner parser and wraps the result in `Some`.
 pub fn opt_param<'a, O, P>(mut parser: P) -> impl FnMut(Span<'a>) -> Res<'a, Option<O>>
 where
     P: Parser<Span<'a>, Output = O, Error = Error<Span<'a>>>,
@@ -118,6 +142,9 @@ where
     }
 }
 
+/// Parses a comma-separated parameter by consuming a leading `,` and then delegating to [`opt_param`].
+///
+/// Returns `None` if the value after the comma is absent; otherwise returns `Some(value)`.
 pub fn param<'a, O, P>(mut parser: P) -> impl FnMut(Span<'a>) -> Res<'a, Option<O>>
 where
     P: Parser<Span<'a>, Output = O, Error = Error<Span<'a>>>,
@@ -128,6 +155,10 @@ where
     }
 }
 
+/// Parses an `x,y` coordinate pair where both values are optional `u32`.
+///
+/// The first value is parsed via [`opt_param`]; the second via [`param`] (comma-prefixed).
+/// Commonly used by `^FO`, `^FT`, and `^LH` commands.
 pub fn parse_xy(input: Span) -> Res<(Option<u32>, Option<u32>)> {
     let (input, x_opt) = opt_param(parse_u32).parse(input)?;
     let (input, y_opt) = param(parse_u32).parse(input).unwrap_or((input, None));

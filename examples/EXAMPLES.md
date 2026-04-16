@@ -83,15 +83,18 @@ Demonstrates the `^IFC` (If Condition Custom) command, which selectively renders
 
 ---
 
-## Multi-Page PDF
+## Multi-Page PDF (Compression Levels)
 
-Demonstrates rendering 100 different shipping labels (each with unique data) into a single multi-page PDF document using `png_merge_pages_to_pdf`. The ZPL template is parsed once, then rendered 100 times with different variables, and finally merged into one PDF.
+Demonstrates rendering 1000 different shipping labels into single multi-page PDF documents using `png_merge_pages_to_pdf`. The ZPL template is parsed once, rendered 1000 times with different variables, and merged into three separate PDFs — one per compression level (`fast`, `default`, `best`).
 
-- **Source:** [`multi_page_pdf.rs`](https://github.com/rafael-arreola/zpl-forge/blob/main/examples/multi_page_pdf.rs)
-- **PDF Output:** [`multi_page_labels.pdf`](https://github.com/rafael-arreola/zpl-forge/raw/main/examples/multi_page_labels.pdf)
+- **Source:** [`zpl_showcase.rs`](https://github.com/rafael-arreola/zpl-forge/blob/main/examples/zpl_showcase.rs)
+- **PDF Outputs:**
+  - [`multi_page_labels_fast.pdf`](https://github.com/rafael-arreola/zpl-forge/raw/main/examples/multi_page_labels_fast.pdf) — Fastest merge, largest file
+  - [`multi_page_labels_default.pdf`](https://github.com/rafael-arreola/zpl-forge/raw/main/examples/multi_page_labels_default.pdf) — Balanced (recommended)
+  - [`multi_page_labels_best.pdf`](https://github.com/rafael-arreola/zpl-forge/raw/main/examples/multi_page_labels_best.pdf) — Smallest file, slowest merge
 
 Run it with:
 
 ```
-cargo run --example multi_page_pdf
+cargo run --example zpl_showcase
 ```

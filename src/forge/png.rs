@@ -1,3 +1,8 @@
+//! PNG rendering backend for ZPL label output.
+//!
+//! This module provides [`PngBackend`], which rasterizes ZPL commands into
+//! RGB PNG images using the `image` and `imageproc` crates.
+
 use std::cmp::max;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -195,7 +200,7 @@ impl ZplForgeBackend for PngBackend {
         font: char,
         height: Option<u32>,
         width: Option<u32>,
-        text: String,
+        text: &str,
         _reverse_print: bool,
         color: Option<String>,
     ) -> ZplResult<()> {
@@ -230,7 +235,7 @@ impl ZplForgeBackend for PngBackend {
             y as i32,
             scale,
             font_data,
-            &text,
+            text,
         );
         Ok(())
     }
@@ -370,7 +375,7 @@ impl ZplForgeBackend for PngBackend {
         y: u32,
         width: u32,
         height: u32,
-        data: Vec<u8>,
+        data: &[u8],
         reverse_print: bool,
     ) -> ZplResult<()> {
         let draw_op = |img: &mut RgbImage, px: i32, py: i32| {
@@ -414,7 +419,7 @@ impl ZplForgeBackend for PngBackend {
         y: u32,
         width: u32,
         height: u32,
-        data: String,
+        data: &str,
     ) -> ZplResult<()> {
         let image_data = general_purpose::STANDARD
             .decode(data.trim())
@@ -464,7 +469,7 @@ impl ZplForgeBackend for PngBackend {
         interpretation_line_above: char,
         _check_digit: char,
         _mode: char,
-        data: String,
+        data: &str,
         reverse_print: bool,
     ) -> ZplResult<()> {
         let (clean_data, hint_val) = if let Some(stripped) = data.strip_prefix(">:") {
@@ -474,7 +479,7 @@ impl ZplForgeBackend for PngBackend {
         } else if let Some(stripped) = data.strip_prefix(">9") {
             (stripped, Some("A"))
         } else {
-            (data.as_str(), None)
+            (data, None)
         };
 
         let hints = hint_val.map(|v| {
@@ -510,7 +515,7 @@ impl ZplForgeBackend for PngBackend {
         magnification: u32,
         error_correction: char,
         _mask: u32,
-        data: String,
+        data: &str,
         reverse_print: bool,
     ) -> ZplResult<()> {
         let level = match error_correction {
@@ -534,7 +539,7 @@ impl ZplForgeBackend for PngBackend {
 
         let writer = MultiFormatWriter;
         let bit_matrix = writer
-            .encode_with_hints(&data, &BarcodeFormat::QR_CODE, 0, 0, &hints)
+            .encode_with_hints(data, &BarcodeFormat::QR_CODE, 0, 0, &hints)
             .map_err(|e| ZplError::BackendError(format!("QR Generation Error: {}", e)))?;
 
         let mag = max(magnification, 1);
@@ -591,7 +596,7 @@ impl ZplForgeBackend for PngBackend {
         module_width: u32,
         interpretation_line: char,
         interpretation_line_above: char,
-        data: String,
+        data: &str,
         reverse_print: bool,
     ) -> ZplResult<()> {
         self.draw_1d_barcode(
@@ -600,7 +605,7 @@ impl ZplForgeBackend for PngBackend {
             orientation,
             height,
             module_width,
-            &data,
+            data,
             BarcodeFormat::CODE_39,
             reverse_print,
             interpretation_line,
@@ -708,7 +713,7 @@ impl PngBackend {
                 font_char,
                 Some(text_h),
                 None,
-                data.to_string(),
+                data,
                 false,
                 None,
             )?;

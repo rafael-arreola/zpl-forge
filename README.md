@@ -34,13 +34,13 @@ If your business generates ZPL code (UPS, FedEx, USPS, internal routing), you li
 
 | Operation                                       | Format | Render Time | Total Processing Time |
 | :---------------------------------------------- | :----: | :---------: | :-------------------: |
-| **Complex Shipping Label** (Barcodes, Graphics) | `PNG`  |  ~20.6 ms   |       ~21.1 ms        |
-| **Complex Shipping Label** (Barcodes, Graphics) | `PDF`  |  ~24.5 ms   |       ~24.8 ms        |
-| **Simple Dispatch Label** (Text, Lines)         | `PNG`  |   ~1.2 ms   |        ~1.4 ms        |
-| **Bitmap Image Decoding** (`^GF`)               | `PNG`  |   ~5.4 ms   |        ~5.8 ms        |
-| **Conditional Rendering** (`^IFC`)              | `PNG`  |   ~3.8 ms   |        ~3.9 ms        |
+| **Complex Shipping Label** (Barcodes, Graphics) | `PNG`  |  ~29.8 ms   |       ~30.4 ms        |
+| **Complex Shipping Label** (Barcodes, Graphics) | `PDF`  |  ~26.6 ms   |       ~27.0 ms        |
+| **Simple Dispatch Label** (Text, Lines)         | `PNG`  |   ~1.3 ms   |        ~1.5 ms        |
+| **Bitmap Image Decoding** (`^GF`)               | `PNG`  |   ~5.5 ms   |        ~5.9 ms        |
+| **Conditional Rendering** (`^IFC`)              | `PNG`  |   ~4.0 ms   |        ~4.2 ms        |
 
-🚀 **Bulk PDF Generation**: Render **1,000 unique shipping labels** into a single multi-page PDF in **~4.4 seconds** (3.36s for multi-threaded layout rendering + 1.06s for PDF multiplexing and zlib compression).
+🚀 **Bulk PDF Generation (Parallel)**: Render **1,000 unique shipping labels** into a single multi-page PDF in **~1.0 second** (0.5s for parallel multi-core rendering + 0.5s for PDF multiplexing with `fast` compression). `ZplEngine` is `Send + Sync` — render thousands of pages across all CPU cores simultaneously.
 
 > _Benchmarks run on Apple Silicon. You can reproduce these locally via:_
 > `cargo run --example zpl_showcase`
@@ -53,7 +53,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-zpl-forge = "0.1"
+zpl-forge = "0.2"
 ```
 
 ## Quick Start: Zero-Allocation Templating
@@ -191,13 +191,14 @@ fn main() {
 
 ### Multi-Page PDF Batching
 
-You can render hundreds of labels with different dynamic data into a single multi-page PDF document using `png_merge_pages_to_pdf`. Parse the ZPL template once, render each page as a PNG in parallel, and multiplex them efficiently.
+You can render hundreds of labels with different dynamic data into a single multi-page PDF document using `png_merge_pages_to_pdf`. Parse the ZPL template once, render each page as a PNG in parallel, and multiplex them efficiently with configurable compression levels.
 
 ```rust
 use std::collections::HashMap;
 use zpl_forge::{ZplEngine, Unit, Resolution};
 use zpl_forge::forge::png::PngBackend;
 use zpl_forge::forge::pdf::png_merge_pages_to_pdf;
+use flate2::Compression;
 
 fn main() -> zpl_forge::ZplResult<()> {
     let zpl_template = "^XA^FO50,50^FDOrder: {{order_id}}^FS^XZ";
@@ -215,7 +216,8 @@ fn main() -> zpl_forge::ZplResult<()> {
     // 2. Merge all PNGs into a single multi-page PDF
     let w = width.to_dots(resolution) as f64;
     let h = height.to_dots(resolution) as f64;
-    let pdf_bytes = png_merge_pages_to_pdf(&pages, w, h, resolution.dpi())?;
+    // Available: Compression::fast(), Compression::default(), Compression::best()
+    let pdf_bytes = png_merge_pages_to_pdf(&pages, w, h, resolution.dpi(), Compression::default())?;
 
     std::fs::write("labels.pdf", pdf_bytes).ok();
     Ok(())

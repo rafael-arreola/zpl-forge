@@ -5,6 +5,8 @@ use zpl_forge::{
     forge::{pdf::PdfBackend, pdf::png_merge_pages_to_pdf, png::PngBackend},
 };
 
+use rayon::prelude::*;
+
 fn run_test<B>(zpl: &str, width: Unit, height: Unit, backend: B, name: &str)
 where
     B: ZplForgeBackend,
@@ -794,27 +796,31 @@ pub fn render_multi_page_pdf() {
     let h_dots = height.to_dots(resolution) as f64;
     let dpi = resolution.dpi();
 
-    println!("[multi_page_labels.pdf] Rendering {} pages...", total_pages);
+    println!(
+        "[multi_page_labels.pdf] Rendering {} pages (parallel)...",
+        total_pages
+    );
     let render_start = Instant::now();
-    let mut pages: Vec<Vec<u8>> = Vec::with_capacity(total_pages);
 
-    for i in 0..total_pages {
-        let mut vars = HashMap::new();
-        vars.insert("order_id".to_string(), format!("ORD-{}", 1001 + i));
-        vars.insert("name".to_string(), names[i % names.len()].to_string());
-        vars.insert(
-            "address".to_string(),
-            addresses[i % addresses.len()].to_string(),
-        );
-        vars.insert("city".to_string(), cities[i % cities.len()].to_string());
-        vars.insert("page".to_string(), format!("{}", i + 1));
-        vars.insert("total".to_string(), format!("{}", total_pages));
+    let pages: Vec<Vec<u8>> = (0..total_pages)
+        .into_par_iter()
+        .map(|i| {
+            let mut vars = HashMap::new();
+            vars.insert("order_id".to_string(), format!("ORD-{}", 1001 + i));
+            vars.insert("name".to_string(), names[i % names.len()].to_string());
+            vars.insert(
+                "address".to_string(),
+                addresses[i % addresses.len()].to_string(),
+            );
+            vars.insert("city".to_string(), cities[i % cities.len()].to_string());
+            vars.insert("page".to_string(), format!("{}", i + 1));
+            vars.insert("total".to_string(), format!("{}", total_pages));
 
-        let png_bytes = engine
-            .render(PngBackend::new(), &vars)
-            .expect("Failed to render page");
-        pages.push(png_bytes);
-    }
+            engine
+                .render(PngBackend::new(), &vars)
+                .expect("Failed to render page")
+        })
+        .collect();
 
     let render_duration = render_start.elapsed();
     println!(
@@ -824,25 +830,38 @@ pub fn render_multi_page_pdf() {
         render_duration.as_millis() as f64 / total_pages as f64
     );
 
-    println!("[multi_page_labels.pdf] Merging into multi-page PDF...");
-    let merge_start = Instant::now();
-    let pdf_bytes = png_merge_pages_to_pdf(&pages, w_dots, h_dots, dpi)
-        .expect("Failed to merge pages into PDF");
-    let merge_duration = merge_start.elapsed();
+    let compression_levels = [
+        ("fast", flate2::Compression::fast()),
+        ("default", flate2::Compression::default()),
+        ("best", flate2::Compression::best()),
+    ];
 
-    std::fs::write("examples/multi_page_labels.pdf", &pdf_bytes).expect("Failed to write PDF");
+    for (level_name, compression) in compression_levels {
+        println!(
+            "[multi_page_labels_{}.pdf] Merging into multi-page PDF...",
+            level_name
+        );
+        let merge_start = Instant::now();
+        let pdf_bytes = png_merge_pages_to_pdf(&pages, w_dots, h_dots, dpi, compression)
+            .expect("Failed to merge pages into PDF");
+        let merge_duration = merge_start.elapsed();
 
-    let total_duration = render_start.elapsed();
-    println!(
-        "[multi_page_labels.pdf] PDF merge took: {:.2?}",
-        merge_duration
-    );
-    println!(
-        "[multi_page_labels.pdf] Saved {} pages ({:.2} MB) | Total time: {:.2?}",
-        total_pages,
-        pdf_bytes.len() as f64 / (1024.0 * 1024.0),
-        total_duration
-    );
+        let output_path = format!("examples/multi_page_labels_{}.pdf", level_name);
+        std::fs::write(&output_path, &pdf_bytes).expect("Failed to write PDF");
+
+        let total_duration = render_start.elapsed();
+        println!(
+            "[multi_page_labels_{}.pdf] PDF merge took: {:.2?}",
+            level_name, merge_duration
+        );
+        println!(
+            "[multi_page_labels_{}.pdf] Saved {} pages ({:.2} MB) | Total time: {:.2?}",
+            level_name,
+            total_pages,
+            pdf_bytes.len() as f64 / (1024.0 * 1024.0),
+            total_duration
+        );
+    }
 }
 
 fn main() {
