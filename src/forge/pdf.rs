@@ -42,7 +42,9 @@ impl PdfBackend {
 }
 
 /// Decodes a PNG buffer into zlib-compressed RGB pixels, returning (compressed_bytes, width, height).
-fn decode_and_compress_png(png_data: &[u8]) -> Result<(Vec<u8>, u32, u32), String> {
+type PreparedPage = (Vec<u8>, u32, u32);
+
+fn decode_and_compress_png(png_data: &[u8]) -> Result<PreparedPage, String> {
     let decoder = PngDecoder::new(std::io::Cursor::new(png_data))
         .map_err(|e| format!("Failed to create PNG decoder: {}", e))?;
     let (w, h) = decoder.dimensions();
@@ -208,7 +210,7 @@ pub fn png_merge_pages_to_pdf(
     let page_h_pt = (height_dots / dpi_f64) * 72.0;
 
     // Parallel: decode PNGs and compress to zlib (one thread per CPU core)
-    let prepared: Vec<Result<(Vec<u8>, u32, u32), String>> = pages
+    let prepared: Vec<Result<PreparedPage, String>> = pages
         .par_iter()
         .map(|png_data| decode_and_compress_png(png_data))
         .collect();

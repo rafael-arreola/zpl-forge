@@ -172,10 +172,10 @@ impl ZplInstructionBuilder {
 
                     if let Some(bpr) = bytes_per_row {
                         self.state.metrics.width = bpr.saturating_mul(8);
-                        if let Some(total) = graphic_field_count {
-                            if *bpr > 0 {
-                                self.state.metrics.height = total / bpr;
-                            }
+                        if let Some(total) = graphic_field_count
+                            && *bpr > 0
+                        {
+                            self.state.metrics.height = total / bpr;
                         }
                     }
                     self.state.graphic_data = Some(bytes);

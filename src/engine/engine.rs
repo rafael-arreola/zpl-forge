@@ -112,11 +112,9 @@ impl ZplEngine {
                 common::ZplInstruction::Code39 { condition, .. } => condition,
             };
 
-            if let Some((var, expected)) = condition {
-                if variables.get(var) != Some(expected) {
-                    continue;
-                }
-            }
+            if let Some((var, expected)) = condition
+                && variables.get(var) != Some(expected)
+            {}
 
             match instruction {
                 common::ZplInstruction::Text {
