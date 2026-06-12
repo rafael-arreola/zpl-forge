@@ -1,7 +1,6 @@
 //! Native vector PDF rendering backend for ZPL label output.
 //!
-//! Unlike [`PdfBackend`](super::pdf::PdfBackend), which rasterizes labels to PNG
-//! first, this backend renders text, shapes, barcodes and images as native PDF
+//! This backend renders text, shapes, barcodes and images as native PDF
 //! vector operations for maximum quality and minimal file size.
 
 use std::cmp::max;
@@ -9,21 +8,84 @@ use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::sync::Arc;
 
-use ab_glyph::{Font, PxScale, ScaleFont};
+use ab_glyph::{Font, FontArc, PxScale, ScaleFont};
 use base64::{Engine as _, engine::general_purpose};
 use flate2::Compression;
 use flate2::write::ZlibEncoder;
-use lopdf::content::{Content, Operation};
 use lopdf::{Document, FontData, Object, Stream, dictionary};
-use rxing::{
-    BarcodeFormat, EncodeHintType, EncodeHintValue, EncodeHints, MultiFormatWriter, Writer,
-};
+use rxing::common::BitMatrix;
+use rxing::{BarcodeFormat, EncodeHintType, EncodeHintValue, EncodeHints};
 
-use crate::engine::{FontManager, ZplForgeBackend};
+use super::{barcode_1d_format, barcode_cache};
+use crate::engine::{Barcode1DKind, FontManager, ZplForgeBackend};
 use crate::{ZplError, ZplResult};
 
 /// Bézier control-point factor for approximating a quarter-circle arc.
 const KAPPA: f64 = 0.5522847498;
+
+// ─── WinAnsi (CP1252) encoding ──────────────────────────────────────────────
+//
+// Embedded fonts are declared with /Encoding WinAnsiEncoding, so text shown
+// with `Tj` must be CP1252 bytes — not UTF-8. This is what makes accented
+// characters (ñ, á, é...) render and copy correctly.
+
+/// Unicode characters for CP1252 codes 0x80..=0x9F (`\u{0}` = undefined).
+const CP1252_80_9F: [char; 32] = [
+    '\u{20AC}', '\u{0}', '\u{201A}', '\u{0192}', '\u{201E}', '\u{2026}', '\u{2020}', '\u{2021}',
+    '\u{02C6}', '\u{2030}', '\u{0160}', '\u{2039}', '\u{0152}', '\u{0}', '\u{017D}', '\u{0}',
+    '\u{0}', '\u{2018}', '\u{2019}', '\u{201C}', '\u{201D}', '\u{2022}', '\u{2013}', '\u{2014}',
+    '\u{02DC}', '\u{2122}', '\u{0161}', '\u{203A}', '\u{0153}', '\u{0}', '\u{017E}', '\u{0178}',
+];
+
+/// Encodes a Unicode char to its CP1252 byte, when representable.
+fn char_to_winansi(c: char) -> Option<u8> {
+    let cp = c as u32;
+    match cp {
+        0x20..=0x7E => Some(cp as u8),
+        // CP1252 0xA0..=0xFF is identical to Latin-1.
+        0xA0..=0xFF => Some(cp as u8),
+        _ => CP1252_80_9F
+            .iter()
+            .position(|&m| m == c && m != '\u{0}')
+            .map(|i| 0x80 + i as u8),
+    }
+}
+
+/// Decodes a CP1252 byte back to its Unicode char, when defined.
+fn winansi_to_char(code: u8) -> Option<char> {
+    match code {
+        0x20..=0x7E => Some(code as char),
+        0xA0..=0xFF => Some(code as char),
+        0x80..=0x9F => {
+            let c = CP1252_80_9F[(code - 0x80) as usize];
+            (c != '\u{0}').then_some(c)
+        }
+        _ => None,
+    }
+}
+
+/// Builds a ToUnicode CMap stream body for the WinAnsi code range.
+fn build_tounicode_cmap() -> Vec<u8> {
+    let mut s = String::with_capacity(4096);
+    s.push_str(
+        "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n\
+         /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n\
+         /CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n\
+         1 begincodespacerange\n<20> <FF>\nendcodespacerange\n",
+    );
+    let entries: Vec<(u8, char)> = (0x20..=0xFFu32)
+        .filter_map(|c| winansi_to_char(c as u8).map(|ch| (c as u8, ch)))
+        .collect();
+    for chunk in entries.chunks(100) {
+        s.push_str(&format!("{} beginbfchar\n", chunk.len()));
+        for (code, ch) in chunk {
+            s.push_str(&format!("<{:02X}> <{:04X}>\n", code, *ch as u32));
+        }
+        s.push_str("endbfchar\n");
+    }
+    s.push_str("endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
+    s.into_bytes()
+}
 
 // ─── Internal types ─────────────────────────────────────────────────────────
 
@@ -33,6 +95,8 @@ struct ImageXObject {
     data: Vec<u8>,
     width: u32,
     height: u32,
+    /// `true` for 1-bit stencil masks (`^GF` bitmaps), `false` for 8-bit RGB.
+    is_mask: bool,
 }
 
 // ─── Public struct ──────────────────────────────────────────────────────────
@@ -51,13 +115,22 @@ pub struct PdfNativeBackend {
     resolution: f32,
     /// `72.0 / dpi` – multiplier that converts dots to PDF points.
     scale: f64,
-    operations: Vec<Operation>,
+    /// Raw PDF content-stream bytes for the page currently being drawn.
+    content: Vec<u8>,
+    /// Content streams of pages already finished via [`ZplForgeBackend::new_page`].
+    finished_pages: Vec<Vec<u8>>,
     font_manager: Option<Arc<FontManager>>,
     images: Vec<ImageXObject>,
     image_counter: usize,
     /// Tracks which font identifiers (e.g. 'A', 'B', '0') have been used during rendering.
     used_fonts: HashSet<char>,
     compression: Compression,
+    /// Optional document title for the PDF Info dictionary.
+    title: Option<String>,
+    /// Solid rectangles painted on the current page, in dots, with their
+    /// fill colour. Used to compute `^FR` (reverse print) geometrically —
+    /// blend modes are unreliable across viewers and print RIPs.
+    backdrop_rects: Vec<(f64, f64, f64, f64, (f64, f64, f64))>,
 }
 
 impl Default for PdfNativeBackend {
@@ -78,18 +151,27 @@ impl PdfNativeBackend {
             height_pt: 0.0,
             resolution: 0.0,
             scale: 0.0,
-            operations: Vec::new(),
+            content: Vec::with_capacity(4096),
+            finished_pages: Vec::new(),
             font_manager: None,
             images: Vec::new(),
             image_counter: 0,
             used_fonts: HashSet::new(),
             compression: Compression::default(),
+            title: None,
+            backdrop_rects: Vec::new(),
         }
     }
 
     /// Sets the zlib compression level for the PDF output (builder pattern).
     pub fn with_compression(mut self, compression: Compression) -> Self {
         self.compression = compression;
+        self
+    }
+
+    /// Sets the document title written to the PDF Info dictionary (builder pattern).
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
         self
     }
 }
@@ -170,34 +252,151 @@ impl PdfNativeBackend {
     }
 
     // ── low-level PDF operation emitters ────────────────────────────
+    //
+    // Operators are written directly as content-stream bytes instead of
+    // accumulating `lopdf::content::Operation` values: barcodes and QR codes
+    // emit thousands of `re` rectangles, and the per-operation allocations
+    // dominated render time.
 
-    fn op(&mut self, operator: &str, operands: Vec<Object>) {
-        self.operations.push(Operation::new(operator, operands));
+    /// Write a number with up to 3 decimals, trimming trailing zeros.
+    fn put_num(buf: &mut Vec<u8>, v: f64) {
+        if v == v.trunc() && v.abs() < 1e12 {
+            let mut itoa = [0u8; 20];
+            let mut n = v as i64;
+            if n < 0 {
+                buf.push(b'-');
+                n = -n;
+            }
+            let mut i = itoa.len();
+            loop {
+                i -= 1;
+                itoa[i] = b'0' + (n % 10) as u8;
+                n /= 10;
+                if n == 0 {
+                    break;
+                }
+            }
+            buf.extend_from_slice(&itoa[i..]);
+        } else {
+            let mut s = format!("{:.3}", v);
+            while s.ends_with('0') {
+                s.pop();
+            }
+            if s.ends_with('.') {
+                s.pop();
+            }
+            buf.extend_from_slice(s.as_bytes());
+        }
+    }
+
+    /// Emit `n1 n2 ... op\n`.
+    fn emit_nums(&mut self, nums: &[f64], op: &str) {
+        for n in nums {
+            Self::put_num(&mut self.content, *n);
+            self.content.push(b' ');
+        }
+        self.content.extend_from_slice(op.as_bytes());
+        self.content.push(b'\n');
+    }
+
+    /// Emit a bare operator: `op\n`.
+    fn emit_op(&mut self, op: &str) {
+        self.content.extend_from_slice(op.as_bytes());
+        self.content.push(b'\n');
+    }
+
+    /// Emit `/Name op\n`.
+    fn emit_name_op(&mut self, name: &str, op: &str) {
+        self.content.push(b'/');
+        self.content.extend_from_slice(name.as_bytes());
+        self.content.push(b' ');
+        self.content.extend_from_slice(op.as_bytes());
+        self.content.push(b'\n');
+    }
+
+    /// Emit `(escaped) Tj\n`, encoding the text as WinAnsi (CP1252) to match
+    /// the embedded fonts' /Encoding. Unmappable characters become '?'.
+    fn emit_tj(&mut self, text: &str) {
+        self.content.push(b'(');
+        for c in text.chars() {
+            let b = char_to_winansi(c).unwrap_or(b'?');
+            match b {
+                b'(' | b')' | b'\\' => {
+                    self.content.push(b'\\');
+                    self.content.push(b);
+                }
+                _ => self.content.push(b),
+            }
+        }
+        self.content.extend_from_slice(b") Tj\n");
     }
 
     fn set_fill_color(&mut self, r: f64, g: f64, b: f64) {
-        self.op("rg", vec![r.into(), g.into(), b.into()]);
+        self.emit_nums(&[r, g, b], "rg");
     }
 
     fn save_state(&mut self) {
-        self.op("q", vec![]);
+        self.emit_op("q");
     }
 
     fn restore_state(&mut self) {
-        self.op("Q", vec![]);
+        self.emit_op("Q");
     }
 
-    /// Enter *reverse-print* mode: save state, activate the `Difference` blend
-    /// mode ExtGState, and set the fill colour to white so that drawing
-    /// effectively XOR-inverts the background.
-    fn begin_reverse(&mut self) {
-        self.save_state();
-        self.op("gs", vec!["GSDiff".into()]);
-        self.set_fill_color(1.0, 1.0, 1.0);
+    // ── reverse-print (geometric) ──────────────────────────────────
+    //
+    // ZPL `^FR` inverts the element against whatever lies beneath it. Instead
+    // of relying on the `Difference` blend mode (poorly supported by Quartz/
+    // Preview and ignored by many print RIPs), the backend tracks the solid
+    // rectangles already painted and repaints their inverse inside a clip
+    // shaped like the reversed element.
+
+    /// Records a solid filled rectangle (in dots) as part of the backdrop.
+    fn track_backdrop_rect(&mut self, x: f64, y: f64, w: f64, h: f64, color: (f64, f64, f64)) {
+        if w > 0.0 && h > 0.0 {
+            self.backdrop_rects.push((x, y, w, h, color));
+        }
     }
 
-    fn end_reverse(&mut self) {
-        self.restore_state();
+    /// Topmost backdrop colour at a point (in dots); white when unpainted.
+    fn backdrop_color_at(&self, px: f64, py: f64) -> (f64, f64, f64) {
+        let mut color = (1.0, 1.0, 1.0);
+        for (rx, ry, rw, rh, c) in &self.backdrop_rects {
+            if px >= *rx && px < rx + rw && py >= *ry && py < ry + rh {
+                color = *c;
+            }
+        }
+        color
+    }
+
+    /// Paints the inverse of the backdrop across the element bounding box
+    /// `(ex, ey, ew, eh)` in dots. The caller must have already established a
+    /// clipping path shaped like the reversed element.
+    fn fill_inverse_backdrop(&mut self, ex: f64, ey: f64, ew: f64, eh: f64) {
+        // Unpainted page is white → its inverse is black.
+        self.set_fill_color(0.0, 0.0, 0.0);
+        let px = self.x_pt(ex);
+        let py = self.y_pt_bottom(ey, eh);
+        let (pw, ph) = (self.d2pt(ew), self.d2pt(eh));
+        self.emit_nums(&[px, py, pw, ph], "re");
+        self.emit_op("f");
+
+        // Repaint intersections with tracked rects using their inverse, in
+        // z-order so later fills win exactly like the original painting did.
+        let rects = self.backdrop_rects.clone();
+        for (rx, ry, rw, rh, (cr, cg, cb)) in rects {
+            let ix0 = rx.max(ex);
+            let iy0 = ry.max(ey);
+            let ix1 = (rx + rw).min(ex + ew);
+            let iy1 = (ry + rh).min(ey + eh);
+            if ix1 > ix0 && iy1 > iy0 {
+                self.set_fill_color(1.0 - cr, 1.0 - cg, 1.0 - cb);
+                let px = self.x_pt(ix0);
+                let py = self.y_pt_bottom(iy0, iy1 - iy0);
+                self.emit_nums(&[px, py, self.d2pt(ix1 - ix0), self.d2pt(iy1 - iy0)], "re");
+                self.emit_op("f");
+            }
+        }
     }
 
     // ── path construction ──────────────────────────────────────────
@@ -209,68 +408,38 @@ impl PdfNativeBackend {
     fn push_rounded_rect_path(&mut self, x: f64, y: f64, w: f64, h: f64, r: f64) {
         let r = r.min(w / 2.0).min(h / 2.0).max(0.0);
         if r < 0.001 {
-            self.op("re", vec![x.into(), y.into(), w.into(), h.into()]);
+            self.emit_nums(&[x, y, w, h], "re");
             return;
         }
         let kr = KAPPA * r;
         // bottom-left → right along bottom edge
-        self.op("m", vec![(x + r).into(), y.into()]);
-        self.op("l", vec![(x + w - r).into(), y.into()]);
+        self.emit_nums(&[x + r, y], "m");
+        self.emit_nums(&[x + w - r, y], "l");
         // bottom-right corner
-        self.op(
-            "c",
-            vec![
-                (x + w - r + kr).into(),
-                y.into(),
-                (x + w).into(),
-                (y + r - kr).into(),
-                (x + w).into(),
-                (y + r).into(),
-            ],
-        );
+        self.emit_nums(&[x + w - r + kr, y, x + w, y + r - kr, x + w, y + r], "c");
         // right edge upward
-        self.op("l", vec![(x + w).into(), (y + h - r).into()]);
+        self.emit_nums(&[x + w, y + h - r], "l");
         // top-right corner
-        self.op(
-            "c",
-            vec![
-                (x + w).into(),
-                (y + h - r + kr).into(),
-                (x + w - r + kr).into(),
-                (y + h).into(),
-                (x + w - r).into(),
-                (y + h).into(),
+        self.emit_nums(
+            &[
+                x + w,
+                y + h - r + kr,
+                x + w - r + kr,
+                y + h,
+                x + w - r,
+                y + h,
             ],
+            "c",
         );
         // top edge leftward
-        self.op("l", vec![(x + r).into(), (y + h).into()]);
+        self.emit_nums(&[x + r, y + h], "l");
         // top-left corner
-        self.op(
-            "c",
-            vec![
-                (x + r - kr).into(),
-                (y + h).into(),
-                x.into(),
-                (y + h - r + kr).into(),
-                x.into(),
-                (y + h - r).into(),
-            ],
-        );
+        self.emit_nums(&[x + r - kr, y + h, x, y + h - r + kr, x, y + h - r], "c");
         // left edge downward
-        self.op("l", vec![x.into(), (y + r).into()]);
+        self.emit_nums(&[x, y + r], "l");
         // bottom-left corner
-        self.op(
-            "c",
-            vec![
-                x.into(),
-                (y + r - kr).into(),
-                (x + r - kr).into(),
-                y.into(),
-                (x + r).into(),
-                y.into(),
-            ],
-        );
-        self.op("h", vec![]);
+        self.emit_nums(&[x, y + r - kr, x + r - kr, y, x + r, y], "c");
+        self.emit_op("h");
     }
 
     /// Append path operators for an ellipse centred at `(cx, cy)` with radii
@@ -279,56 +448,16 @@ impl PdfNativeBackend {
         let kx = KAPPA * rx;
         let ky = KAPPA * ry;
         // start at 3-o'clock
-        self.op("m", vec![(cx + rx).into(), cy.into()]);
+        self.emit_nums(&[cx + rx, cy], "m");
         // → 12-o'clock
-        self.op(
-            "c",
-            vec![
-                (cx + rx).into(),
-                (cy + ky).into(),
-                (cx + kx).into(),
-                (cy + ry).into(),
-                cx.into(),
-                (cy + ry).into(),
-            ],
-        );
+        self.emit_nums(&[cx + rx, cy + ky, cx + kx, cy + ry, cx, cy + ry], "c");
         // → 9-o'clock
-        self.op(
-            "c",
-            vec![
-                (cx - kx).into(),
-                (cy + ry).into(),
-                (cx - rx).into(),
-                (cy + ky).into(),
-                (cx - rx).into(),
-                cy.into(),
-            ],
-        );
+        self.emit_nums(&[cx - kx, cy + ry, cx - rx, cy + ky, cx - rx, cy], "c");
         // → 6-o'clock
-        self.op(
-            "c",
-            vec![
-                (cx - rx).into(),
-                (cy - ky).into(),
-                (cx - kx).into(),
-                (cy - ry).into(),
-                cx.into(),
-                (cy - ry).into(),
-            ],
-        );
+        self.emit_nums(&[cx - rx, cy - ky, cx - kx, cy - ry, cx, cy - ry], "c");
         // → back to 3-o'clock
-        self.op(
-            "c",
-            vec![
-                (cx + kx).into(),
-                (cy - ry).into(),
-                (cx + rx).into(),
-                (cy - ky).into(),
-                (cx + rx).into(),
-                cy.into(),
-            ],
-        );
-        self.op("h", vec![]);
+        self.emit_nums(&[cx + kx, cy - ry, cx + rx, cy - ky, cx + rx, cy], "c");
+        self.emit_op("h");
     }
 
     // ── font / text helpers ────────────────────────────────────────
@@ -395,18 +524,8 @@ impl PdfNativeBackend {
         let ph = self.d2pt(img_h as f64);
 
         self.save_state();
-        self.op(
-            "cm",
-            vec![
-                pw.into(),
-                0.into(),
-                0.into(),
-                ph.into(),
-                px.into(),
-                py.into(),
-            ],
-        );
-        self.op("Do", vec![Object::Name(name.as_bytes().to_vec())]);
+        self.emit_nums(&[pw, 0.0, 0.0, ph, px, py], "cm");
+        self.emit_name_op(&name, "Do");
         self.restore_state();
 
         self.images.push(ImageXObject {
@@ -414,6 +533,51 @@ impl PdfNativeBackend {
             data: rgb_data,
             width: img_w,
             height: img_h,
+            is_mask: false,
+        });
+    }
+
+    /// Store 1-bit bitmap data as a future stencil-mask XObject and emit the
+    /// operators that paint it on the page. Set bits (ZPL black) are painted
+    /// with the current fill colour; clear bits are transparent.
+    fn embed_mask_image(
+        &mut self,
+        x_dots: f64,
+        y_dots: f64,
+        img_w: u32,
+        img_h: u32,
+        bits: Vec<u8>,
+        reverse_print: bool,
+    ) {
+        let name = format!("Im{}", self.image_counter);
+        self.image_counter += 1;
+
+        let px = self.x_pt(x_dots);
+        let py = self.y_pt_bottom(y_dots, img_h as f64);
+        let pw = self.d2pt(img_w as f64);
+        let ph = self.d2pt(img_h as f64);
+
+        self.save_state();
+        if reverse_print {
+            // Stencil masks can't be clipped per-pixel without SMasks, so
+            // approximate: paint with the inverse of the backdrop colour at
+            // the bitmap centre.
+            let (br, bg, bb) =
+                self.backdrop_color_at(x_dots + img_w as f64 / 2.0, y_dots + img_h as f64 / 2.0);
+            self.set_fill_color(1.0 - br, 1.0 - bg, 1.0 - bb);
+        } else {
+            self.set_fill_color(0.0, 0.0, 0.0);
+        }
+        self.emit_nums(&[pw, 0.0, 0.0, ph, px, py], "cm");
+        self.emit_name_op(&name, "Do");
+        self.restore_state();
+
+        self.images.push(ImageXObject {
+            name,
+            data: bits,
+            width: img_w,
+            height: img_h,
+            is_mask: true,
         });
     }
 
@@ -504,14 +668,9 @@ impl PdfNativeBackend {
         interpretation_line: char,
         interpretation_line_above: char,
         hints: Option<EncodeHints>,
+        hints_key: &str,
     ) -> ZplResult<()> {
-        let writer = MultiFormatWriter;
-        let bit_matrix = if let Some(h) = hints {
-            writer.encode_with_hints(data, &format, 0, 0, &h)
-        } else {
-            writer.encode(data, &format, 0, 0)
-        }
-        .map_err(|e| ZplError::BackendError(format!("Barcode Generation Error: {}", e)))?;
+        let bit_matrix = barcode_cache::encode_cached(format, data, hints_key, hints.as_ref())?;
 
         let mw = max(module_width, 1);
         let bh = height;
@@ -523,10 +682,8 @@ impl PdfNativeBackend {
         };
 
         // ── emit bar rectangles ────────────────────────────────────
-        if reverse_print {
-            self.begin_reverse();
-        } else {
-            self.save_state();
+        self.save_state();
+        if !reverse_print {
             self.set_fill_color(0.0, 0.0, 0.0);
         }
 
@@ -538,19 +695,38 @@ impl PdfNativeBackend {
                 let py = self.height_pt - self.d2pt(ry as f64 + rh as f64);
                 let pw = self.d2pt(rw as f64);
                 let ph = self.d2pt(rh as f64);
-                self.op("re", vec![px.into(), py.into(), pw.into(), ph.into()]);
+                self.emit_nums(&[px, py, pw, ph], "re");
             }
         }
-        self.op("f", vec![]);
-
         if reverse_print {
-            self.end_reverse();
+            // Use the bars as a clip and invert the backdrop inside them.
+            self.emit_op("W");
+            self.emit_op("n");
+            self.fill_inverse_backdrop(x as f64, y as f64, full_w as f64, full_h as f64);
         } else {
-            self.restore_state();
+            self.emit_op("f");
         }
+        self.restore_state();
 
         // ── interpretation line ────────────────────────────────────
         if interpretation_line == 'Y' {
+            self.draw_interpretation_line(x, y, full_w, full_h, data, interpretation_line_above)?;
+        }
+
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_interpretation_line(
+        &mut self,
+        x: u32,
+        y: u32,
+        full_w: u32,
+        full_h: u32,
+        data: &str,
+        interpretation_line_above: char,
+    ) -> ZplResult<()> {
+        {
             let font_char = '0';
             let text_h: u32 = 18;
             let text_y = if interpretation_line_above == 'Y' {
@@ -572,6 +748,7 @@ impl PdfNativeBackend {
                 font_char,
                 Some(text_h),
                 None,
+                'N',
                 data,
                 false,
                 None,
@@ -579,6 +756,66 @@ impl PdfNativeBackend {
         }
 
         Ok(())
+    }
+
+    /// Paints every set cell of a 2-D bit matrix as a filled rectangle,
+    /// scaling each cell to `cell_w` × `cell_h` dots and applying the
+    /// requested orientation.
+    #[allow(clippy::too_many_arguments)]
+    fn fill_matrix_cells(
+        &mut self,
+        x: u32,
+        y: u32,
+        orientation: char,
+        cell_w: u32,
+        cell_h: u32,
+        bit_matrix: &BitMatrix,
+        reverse_print: bool,
+    ) {
+        let bw = bit_matrix.getWidth();
+        let bh = bit_matrix.getHeight();
+        let full_w = bw * cell_w;
+        let full_h = bh * cell_h;
+
+        self.save_state();
+        if !reverse_print {
+            self.set_fill_color(0.0, 0.0, 0.0);
+        }
+
+        for gy in 0..bh {
+            for gx in 0..bw {
+                if bit_matrix.get(gx, gy) {
+                    let (rx, ry, rw, rh) = Self::transform_2d_cell(
+                        orientation,
+                        x,
+                        y,
+                        (gx * cell_w) as i32,
+                        (gy * cell_h) as i32,
+                        cell_w,
+                        cell_h,
+                        full_w,
+                        full_h,
+                    );
+                    let px = self.d2pt(rx as f64);
+                    let py = self.height_pt - self.d2pt(ry as f64 + rh as f64);
+                    let pw = self.d2pt(rw as f64);
+                    let ph = self.d2pt(rh as f64);
+                    self.emit_nums(&[px, py, pw, ph], "re");
+                }
+            }
+        }
+        if reverse_print {
+            self.emit_op("W");
+            self.emit_op("n");
+            let (fw, fh) = match orientation {
+                'R' | 'B' => (full_h, full_w),
+                _ => (full_w, full_h),
+            };
+            self.fill_inverse_backdrop(x as f64, y as f64, fw as f64, fh as f64);
+        } else {
+            self.emit_op("f");
+        }
+        self.restore_state();
     }
 }
 
@@ -599,6 +836,12 @@ impl ZplForgeBackend for PdfNativeBackend {
         self.font_manager = Some(Arc::new(font_manager.clone()));
     }
 
+    fn new_page(&mut self) -> ZplResult<()> {
+        self.finished_pages.push(std::mem::take(&mut self.content));
+        self.backdrop_rects.clear();
+        Ok(())
+    }
+
     // ── text ───────────────────────────────────────────────────────
 
     fn draw_text(
@@ -608,6 +851,7 @@ impl ZplForgeBackend for PdfNativeBackend {
         font: char,
         height: Option<u32>,
         width: Option<u32>,
+        orientation: char,
         text: &str,
         reverse_print: bool,
         color: Option<String>,
@@ -627,52 +871,85 @@ impl ZplForgeBackend for PdfNativeBackend {
         let ascent_dots = {
             let font_arc = self.get_font_arc(font)?;
             font_arc.as_scaled(px_scale).ascent()
-        };
+        } as f64;
 
         self.used_fonts.insert(font);
 
         let scale_x_pt = self.d2pt(scale_x_dots as f64);
         let scale_y_pt = self.d2pt(scale_y_dots as f64);
-        let tx = self.x_pt(x as f64);
-        // Baseline position: page_height - (y_top + ascent) * scale
-        let ty = self.height_pt - (y as f64 + ascent_dots as f64) * self.scale;
+        let h_dots = scale_y_dots as f64;
+        let x = x as f64;
+        let y = y as f64;
 
-        if reverse_print {
-            self.begin_reverse();
+        // Text width anchors 'I'/'B' rotations and sizes the reverse bbox.
+        let tw_dots = if reverse_print || orientation == 'I' || orientation == 'B' {
+            self.get_text_width(text, font, height, width) as f64
         } else {
+            0.0
+        };
+
+        // Text matrix [a b c d tx ty]: scale plus the ^A rotation, with
+        // (x, y) anchoring the top-left corner of the rotated cell.
+        let tm = match orientation {
+            'R' => [
+                0.0,
+                -scale_x_pt,
+                scale_y_pt,
+                0.0,
+                self.x_pt(x + h_dots - ascent_dots),
+                self.height_pt - y * self.scale,
+            ],
+            'I' => [
+                -scale_x_pt,
+                0.0,
+                0.0,
+                -scale_y_pt,
+                self.x_pt(x + tw_dots),
+                self.height_pt - (y + h_dots - ascent_dots) * self.scale,
+            ],
+            'B' => [
+                0.0,
+                scale_x_pt,
+                -scale_y_pt,
+                0.0,
+                self.x_pt(x + ascent_dots),
+                self.height_pt - (y + tw_dots) * self.scale,
+            ],
+            _ => [
+                scale_x_pt,
+                0.0,
+                0.0,
+                scale_y_pt,
+                self.x_pt(x),
+                self.height_pt - (y + ascent_dots) * self.scale,
+            ],
+        };
+
+        self.save_state();
+        if !reverse_print {
             let (r, g, b) = Self::parse_hex_color_f64(&color);
-            self.save_state();
             self.set_fill_color(r, g, b);
         }
 
-        self.op("BT", vec![]);
-        self.op(
-            "Tm",
-            vec![
-                scale_x_pt.into(),
-                0.into(),
-                0.into(),
-                scale_y_pt.into(),
-                tx.into(),
-                ty.into(),
-            ],
-        );
+        self.emit_op("BT");
+        if reverse_print {
+            // Text rendering mode 7: glyph outlines become the clipping path.
+            self.emit_nums(&[7.0], "Tr");
+        }
+        self.emit_nums(&tm, "Tm");
         let font_resource_name = format!("F_{}", font);
-        self.op(
-            "Tf",
-            vec![
-                Object::Name(font_resource_name.into_bytes()),
-                Object::Real(1.0),
-            ],
-        );
-        self.op("Tj", vec![Object::string_literal(text.as_bytes().to_vec())]);
-        self.op("ET", vec![]);
+        self.emit_name_op(&format!("{} 1", font_resource_name), "Tf");
+        self.emit_tj(text);
+        self.emit_op("ET");
 
         if reverse_print {
-            self.end_reverse();
-        } else {
-            self.restore_state();
+            let (bw_dots, bh_dots) = match orientation {
+                'R' | 'B' => (h_dots, tw_dots),
+                _ => (tw_dots, h_dots),
+            };
+            self.fill_inverse_backdrop(x, y, bw_dots, bh_dots);
         }
+        self.restore_state();
 
         Ok(())
     }
@@ -704,14 +981,14 @@ impl ZplForgeBackend for PdfNativeBackend {
         let bh = self.d2pt(h);
         let br = self.d2pt(r_dots);
 
+        let has_inner = t * 2.0 < w && t * 2.0 < h;
+
         if reverse_print {
-            // With Difference blend-mode, drawing white inverts the area.
-            // Drawing the inner cutout a second time re-inverts it back to
-            // the original, leaving only the border ring inverted.
-            self.begin_reverse();
+            // Clip to the box (solid) or its border ring (even-odd) and
+            // repaint the inverse of the backdrop inside it.
+            self.save_state();
             self.push_rounded_rect_path(bx, by, bw, bh, br);
-            self.op("f", vec![]);
-            if t * 2.0 < w && t * 2.0 < h {
+            if has_inner {
                 let tp = self.d2pt(t);
                 let inner_r = self.d2pt((r_dots - t).max(0.0));
                 self.push_rounded_rect_path(
@@ -721,17 +998,22 @@ impl ZplForgeBackend for PdfNativeBackend {
                     bh - tp * 2.0,
                     inner_r,
                 );
-                self.op("f", vec![]);
+                self.emit_op("W*");
+            } else {
+                self.emit_op("W");
             }
-            self.end_reverse();
+            self.emit_op("n");
+            self.fill_inverse_backdrop(x as f64, y as f64, w, h);
+            self.restore_state();
         } else {
             self.save_state();
             let (r, g, b) = draw_color;
             self.set_fill_color(r, g, b);
             self.push_rounded_rect_path(bx, by, bw, bh, br);
-            self.op("f", vec![]);
+            self.emit_op("f");
+            self.track_backdrop_rect(x as f64, y as f64, w, h, draw_color);
 
-            if t * 2.0 < w && t * 2.0 < h {
+            if has_inner {
                 let (cr, cg, cb) = clear_color;
                 self.set_fill_color(cr, cg, cb);
                 let tp = self.d2pt(t);
@@ -743,7 +1025,14 @@ impl ZplForgeBackend for PdfNativeBackend {
                     bh - tp * 2.0,
                     inner_r,
                 );
-                self.op("f", vec![]);
+                self.emit_op("f");
+                self.track_backdrop_rect(
+                    x as f64 + t,
+                    y as f64 + t,
+                    w - t * 2.0,
+                    h - t * 2.0,
+                    clear_color,
+                );
             }
             self.restore_state();
         }
@@ -771,27 +1060,35 @@ impl ZplForgeBackend for PdfNativeBackend {
         let cy_pt = self.height_pt - (y as f64 + radius as f64) * self.scale;
 
         if reverse_print {
-            self.begin_reverse();
+            self.save_state();
             self.push_ellipse_path(cx_pt, cy_pt, r_pt, r_pt);
-            self.op("f", vec![]);
             if radius > thickness {
                 let inner_r = self.d2pt((radius - thickness) as f64);
                 self.push_ellipse_path(cx_pt, cy_pt, inner_r, inner_r);
-                self.op("f", vec![]);
+                self.emit_op("W*");
+            } else {
+                self.emit_op("W");
             }
-            self.end_reverse();
+            self.emit_op("n");
+            self.fill_inverse_backdrop(
+                x as f64,
+                y as f64,
+                radius as f64 * 2.0,
+                radius as f64 * 2.0,
+            );
+            self.restore_state();
         } else {
             self.save_state();
             let (r, g, b) = draw_color;
             self.set_fill_color(r, g, b);
             self.push_ellipse_path(cx_pt, cy_pt, r_pt, r_pt);
-            self.op("f", vec![]);
+            self.emit_op("f");
 
             if radius > thickness {
                 self.set_fill_color(1.0, 1.0, 1.0);
                 let inner_r = self.d2pt((radius - thickness) as f64);
                 self.push_ellipse_path(cx_pt, cy_pt, inner_r, inner_r);
-                self.op("f", vec![]);
+                self.emit_op("f");
             }
             self.restore_state();
         }
@@ -822,29 +1119,32 @@ impl ZplForgeBackend for PdfNativeBackend {
         let t = thickness as f64;
 
         if reverse_print {
-            self.begin_reverse();
+            self.save_state();
             self.push_ellipse_path(cx_pt, cy_pt, rx_pt, ry_pt);
-            self.op("f", vec![]);
             if (width as f64 / 2.0) > t && (height as f64 / 2.0) > t {
                 let irx = self.d2pt(width as f64 / 2.0 - t);
                 let iry = self.d2pt(height as f64 / 2.0 - t);
                 self.push_ellipse_path(cx_pt, cy_pt, irx, iry);
-                self.op("f", vec![]);
+                self.emit_op("W*");
+            } else {
+                self.emit_op("W");
             }
-            self.end_reverse();
+            self.emit_op("n");
+            self.fill_inverse_backdrop(x as f64, y as f64, width as f64, height as f64);
+            self.restore_state();
         } else {
             self.save_state();
             let (r, g, b) = draw_color;
             self.set_fill_color(r, g, b);
             self.push_ellipse_path(cx_pt, cy_pt, rx_pt, ry_pt);
-            self.op("f", vec![]);
+            self.emit_op("f");
 
             if (width as f64 / 2.0) > t && (height as f64 / 2.0) > t {
                 self.set_fill_color(1.0, 1.0, 1.0);
                 let irx = self.d2pt(width as f64 / 2.0 - t);
                 let iry = self.d2pt(height as f64 / 2.0 - t);
                 self.push_ellipse_path(cx_pt, cy_pt, irx, iry);
-                self.op("f", vec![]);
+                self.emit_op("f");
             }
             self.restore_state();
         }
@@ -861,38 +1161,21 @@ impl ZplForgeBackend for PdfNativeBackend {
         width: u32,
         height: u32,
         data: &[u8],
-        _reverse_print: bool,
+        reverse_print: bool,
     ) -> ZplResult<()> {
         if width == 0 || height == 0 {
             return Ok(());
         }
 
+        // ZPL ^GF rows are already byte-padded (ceil(width/8) bytes per row),
+        // exactly the layout a 1-bit PDF image expects. Pad or truncate to the
+        // full bitmap size; padding bytes are 0 (unpainted with Decode [1 0]).
         let row_bytes = width.div_ceil(8) as usize;
-        let mut rgb_data = Vec::with_capacity((width * height * 3) as usize);
+        let total_bytes = row_bytes * height as usize;
+        let mut bits = data.to_vec();
+        bits.resize(total_bytes, 0x00);
 
-        for row_idx in 0..height {
-            let row_start = row_idx as usize * row_bytes;
-            let row_end = (row_start + row_bytes).min(data.len());
-            let row_data = if row_start < data.len() {
-                &data[row_start..row_end]
-            } else {
-                &[]
-            };
-
-            for col in 0..width {
-                let byte_idx = (col / 8) as usize;
-                let bit_idx = 7 - (col % 8);
-                let is_set =
-                    byte_idx < row_data.len() && (row_data[byte_idx] & (1 << bit_idx)) != 0;
-                if is_set {
-                    rgb_data.extend_from_slice(&[0, 0, 0]);
-                } else {
-                    rgb_data.extend_from_slice(&[255, 255, 255]);
-                }
-            }
-        }
-
-        self.embed_rgb_image(x as f64, y as f64, width, height, rgb_data);
+        self.embed_mask_image(x as f64, y as f64, width, height, bits, reverse_print);
         Ok(())
     }
 
@@ -967,7 +1250,7 @@ impl ZplForgeBackend for PdfNativeBackend {
         } else if let Some(stripped) = data.strip_prefix(">9") {
             (stripped, Some("A"))
         } else {
-            (data, None)
+            (data, Some("B")) // Standard default is Code Set B
         };
 
         let hints = hint_val.map(|v| {
@@ -991,6 +1274,7 @@ impl ZplForgeBackend for PdfNativeBackend {
             interpretation_line,
             interpretation_line_above,
             hints,
+            hint_val.unwrap_or(""),
         )
     }
 
@@ -1027,54 +1311,70 @@ impl ZplForgeBackend for PdfNativeBackend {
         );
         let hints: EncodeHints = hints.into();
 
-        let writer = MultiFormatWriter;
-        let bit_matrix = writer
-            .encode_with_hints(data, &BarcodeFormat::QR_CODE, 0, 0, &hints)
-            .map_err(|e| ZplError::BackendError(format!("QR Generation Error: {}", e)))?;
+        let bit_matrix = barcode_cache::encode_cached(
+            BarcodeFormat::QR_CODE,
+            data,
+            &format!("ec:{}", level),
+            Some(&hints),
+        )?;
 
         let mag = max(magnification, 1);
-        let bw = bit_matrix.getWidth();
-        let bh = bit_matrix.getHeight();
-        let full_w = bw * mag;
-        let full_h = bh * mag;
+        self.fill_matrix_cells(x, y, orientation, mag, mag, &bit_matrix, reverse_print);
+        Ok(())
+    }
 
-        if reverse_print {
-            self.begin_reverse();
-        } else {
-            self.save_state();
-            self.set_fill_color(0.0, 0.0, 0.0);
-        }
+    // ── Data Matrix barcode ────────────────────────────────────────
 
-        for gy in 0..bh {
-            for gx in 0..bw {
-                if bit_matrix.get(gx, gy) {
-                    let (rx, ry, rw, rh) = Self::transform_2d_cell(
-                        orientation,
-                        x,
-                        y,
-                        (gx * mag) as i32,
-                        (gy * mag) as i32,
-                        mag,
-                        mag,
-                        full_w,
-                        full_h,
-                    );
-                    let px = self.d2pt(rx as f64);
-                    let py = self.height_pt - self.d2pt(ry as f64 + rh as f64);
-                    let pw = self.d2pt(rw as f64);
-                    let ph = self.d2pt(rh as f64);
-                    self.op("re", vec![px.into(), py.into(), pw.into(), ph.into()]);
-                }
-            }
-        }
-        self.op("f", vec![]);
+    fn draw_datamatrix(
+        &mut self,
+        x: u32,
+        y: u32,
+        orientation: char,
+        module_size: u32,
+        data: &str,
+        reverse_print: bool,
+    ) -> ZplResult<()> {
+        let bit_matrix = barcode_cache::encode_cached(BarcodeFormat::DATA_MATRIX, data, "", None)?;
 
-        if reverse_print {
-            self.end_reverse();
-        } else {
-            self.restore_state();
-        }
+        let m = max(module_size, 1);
+        self.fill_matrix_cells(x, y, orientation, m, m, &bit_matrix, reverse_print);
+        Ok(())
+    }
 
+    // ── PDF417 barcode ─────────────────────────────────────────────
+
+    fn draw_pdf417(
+        &mut self,
+        x: u32,
+        y: u32,
+        orientation: char,
+        row_height: u32,
+        module_width: u32,
+        security_level: u32,
+        data: &str,
+        reverse_print: bool,
+    ) -> ZplResult<()> {
+        let mut hints = HashMap::new();
+        hints.insert(
+            EncodeHintType::ERROR_CORRECTION,
+            EncodeHintValue::ErrorCorrection(security_level.min(8).to_string()),
+        );
+        hints.insert(
+            EncodeHintType::MARGIN,
+            EncodeHintValue::Margin("0".to_owned()),
+        );
+        let hints: EncodeHints = hints.into();
+
+        let bit_matrix = barcode_cache::encode_cached(
+            BarcodeFormat::PDF_417,
+            data,
+            &format!("ec:{}", security_level.min(8)),
+            Some(&hints),
+        )?;
+
+        let cw = max(module_width, 1);
+        let ch = max(row_height, 1);
+        self.fill_matrix_cells(x, y, orientation, cw, ch, &bit_matrix, reverse_print);
         Ok(())
     }
 
@@ -1105,7 +1405,94 @@ impl ZplForgeBackend for PdfNativeBackend {
             interpretation_line,
             interpretation_line_above,
             None,
+            "",
         )
+    }
+
+    // ── generic 1-D barcodes (EAN-13, UPC-A, ITF, Code 93) ────────
+
+    fn draw_barcode_1d(
+        &mut self,
+        kind: Barcode1DKind,
+        x: u32,
+        y: u32,
+        orientation: char,
+        height: u32,
+        module_width: u32,
+        interpretation_line: char,
+        interpretation_line_above: char,
+        data: &str,
+        reverse_print: bool,
+    ) -> ZplResult<()> {
+        self.draw_1d_barcode(
+            x,
+            y,
+            orientation,
+            height,
+            module_width,
+            data,
+            barcode_1d_format(kind),
+            reverse_print,
+            interpretation_line,
+            interpretation_line_above,
+            None,
+            "",
+        )
+    }
+
+    // ── diagonal line (^GD) ────────────────────────────────────────
+
+    fn draw_graphic_diagonal(
+        &mut self,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+        thickness: u32,
+        color: char,
+        custom_color: Option<String>,
+        diagonal_orientation: char,
+        reverse_print: bool,
+    ) -> ZplResult<()> {
+        let (draw_color, _) = Self::resolve_colors(color, &custom_color);
+
+        let w = max(width, 1) as f64;
+        let h = max(height, 1) as f64;
+        let t = (max(thickness, 1) as f64).min(w);
+        let x = x as f64;
+        let y = y as f64;
+
+        // Filled parallelogram with horizontal thickness `t`.
+        let pts: [(f64, f64); 4] = if diagonal_orientation == 'L' {
+            // '\' top-left → bottom-right
+            [(x, y), (x + t, y), (x + w, y + h), (x + w - t, y + h)]
+        } else {
+            // '/' bottom-left → top-right
+            [(x, y + h), (x + t, y + h), (x + w, y), (x + w - t, y)]
+        };
+
+        self.save_state();
+        if !reverse_print {
+            let (r, g, b) = draw_color;
+            self.set_fill_color(r, g, b);
+        }
+
+        for (i, (dx, dy)) in pts.iter().enumerate() {
+            let px = self.x_pt(*dx);
+            let py = self.height_pt - dy * self.scale;
+            self.emit_nums(&[px, py], if i == 0 { "m" } else { "l" });
+        }
+        self.emit_op("h");
+        if reverse_print {
+            self.emit_op("W");
+            self.emit_op("n");
+            self.fill_inverse_backdrop(x, y, w, h);
+        } else {
+            self.emit_op("f");
+        }
+        self.restore_state();
+
+        Ok(())
     }
 
     // ── finalize ───────────────────────────────────────────────────
@@ -1115,27 +1502,31 @@ impl ZplForgeBackend for PdfNativeBackend {
         let pages_id = doc.new_object_id();
 
         // ── embed fonts ────────────────────────────────────────────
-        let default_font_bytes: &[u8] = include_bytes!("../assets/Oswald-Regular.ttf");
+        //
+        // Font objects are built manually instead of using `lopdf::Document::
+        // add_font`, which omits /Widths and /ToUnicode and stores descriptor
+        // metrics in raw font units. Here every metric is normalized to the
+        // 1000/em glyph space and a ToUnicode CMap makes text extraction
+        // (copy/paste, search) work for the full WinAnsi range.
+        let default_font_bytes: &[u8] = include_bytes!("../assets/IosevkaTermSlab-Regular.ttf");
         let mut font_dict = lopdf::Dictionary::new();
-        let mut embedded_fonts: HashSet<String> = HashSet::new();
+        // Dedup: multiple ZPL identifiers often map to the same font.
+        let mut embedded_fonts: HashMap<String, lopdf::ObjectId> = HashMap::new();
+        let tounicode_id = doc.add_object(Stream::new(dictionary! {}, build_tounicode_cmap()));
 
         for font_char in &self.used_fonts {
             let font_key = font_char.to_string();
             let resource_name = format!("F_{}", font_char);
 
-            // Get the font name to deduplicate (multiple chars may map to same font)
-            let font_name = self
+            let actual_name = self
                 .font_manager
                 .as_ref()
-                .and_then(|fm| fm.get_font_name(&font_key).map(|s| s.to_string()));
+                .and_then(|fm| fm.get_font_name(&font_key).map(|s| s.to_string()))
+                .unwrap_or_else(|| "Iosevka Term Slab".to_string());
 
-            let actual_name = font_name.unwrap_or_else(|| "Oswald".to_string());
-
-            // Skip if we already embedded this font under a different char
-            // but still add the resource alias
-            if embedded_fonts.contains(&actual_name) {
-                // Find the already-embedded font id by looking through font_dict
-                // Simpler: just embed again (lopdf handles dedup at compression)
+            if let Some(font_id) = embedded_fonts.get(&actual_name) {
+                font_dict.set(resource_name.as_str(), *font_id);
+                continue;
             }
 
             let raw_bytes = self
@@ -1144,13 +1535,62 @@ impl ZplForgeBackend for PdfNativeBackend {
                 .and_then(|fm| fm.get_font_bytes(&font_key))
                 .unwrap_or(default_font_bytes);
 
-            let font_data = FontData::new(raw_bytes, actual_name.clone());
-            let font_id = doc
-                .add_font(font_data)
-                .map_err(|e| ZplError::BackendError(format!("Failed to embed font: {}", e)))?;
+            let face = FontArc::try_from_vec(raw_bytes.to_vec())
+                .map_err(|e| ZplError::FontError(format!("Invalid font data: {}", e)))?;
+            let upem = face.units_per_em().unwrap_or(1000.0) as f64;
+            let to_glyph_space = |v: f64| (v * 1000.0 / upem).round() as i64;
+
+            // /Widths for the WinAnsi code range 32..=255.
+            let widths: Vec<Object> = (0x20..=0xFFu32)
+                .map(|code| {
+                    let w = winansi_to_char(code as u8)
+                        .map(|ch| to_glyph_space(face.h_advance_unscaled(face.glyph_id(ch)) as f64))
+                        .unwrap_or(0);
+                    w.into()
+                })
+                .collect();
+
+            // Bounding box and style metrics via ttf-parser (lopdf::FontData).
+            let fd = FontData::new(raw_bytes, actual_name.clone());
+
+            let font_stream = Stream::new(
+                dictionary! { "Length1" => raw_bytes.len() as i64 },
+                raw_bytes.to_vec(),
+            );
+            let font_file_id = doc.add_object(font_stream);
+
+            let descriptor_id = doc.add_object(dictionary! {
+                "Type" => "FontDescriptor",
+                "FontName" => Object::Name(actual_name.clone().into_bytes()),
+                "Flags" => 32_i64,
+                "FontBBox" => vec![
+                    to_glyph_space(fd.font_bbox.0 as f64).into(),
+                    to_glyph_space(fd.font_bbox.1 as f64).into(),
+                    to_glyph_space(fd.font_bbox.2 as f64).into(),
+                    to_glyph_space(fd.font_bbox.3 as f64).into(),
+                ],
+                "ItalicAngle" => fd.italic_angle,
+                "Ascent" => to_glyph_space(fd.ascent as f64),
+                "Descent" => to_glyph_space(fd.descent as f64),
+                "CapHeight" => to_glyph_space(fd.cap_height as f64),
+                "StemV" => 80_i64,
+                "FontFile2" => font_file_id,
+            });
+
+            let font_id = doc.add_object(dictionary! {
+                "Type" => "Font",
+                "Subtype" => "TrueType",
+                "BaseFont" => Object::Name(actual_name.clone().into_bytes()),
+                "FirstChar" => 32_i64,
+                "LastChar" => 255_i64,
+                "Widths" => widths,
+                "FontDescriptor" => descriptor_id,
+                "Encoding" => "WinAnsiEncoding",
+                "ToUnicode" => tounicode_id,
+            });
 
             font_dict.set(resource_name.as_str(), font_id);
-            embedded_fonts.insert(actual_name);
+            embedded_fonts.insert(actual_name, font_id);
         }
 
         // ── XObject images ─────────────────────────────────────────
@@ -1164,7 +1604,20 @@ impl ZplForgeBackend for PdfNativeBackend {
                 .finish()
                 .map_err(|e| ZplError::BackendError(e.to_string()))?;
 
-            let img_stream = Stream::new(
+            let dict = if img.is_mask {
+                // Stencil mask: sample 1 paints with the current fill colour
+                // (Decode [1 0]), sample 0 leaves the page untouched.
+                dictionary! {
+                    "Type" => "XObject",
+                    "Subtype" => "Image",
+                    "Width" => img.width as i64,
+                    "Height" => img.height as i64,
+                    "ImageMask" => true,
+                    "BitsPerComponent" => 1,
+                    "Decode" => vec![1.into(), 0.into()],
+                    "Filter" => "FlateDecode",
+                }
+            } else {
                 dictionary! {
                     "Type" => "XObject",
                     "Subtype" => "Image",
@@ -1173,62 +1626,46 @@ impl ZplForgeBackend for PdfNativeBackend {
                     "ColorSpace" => "DeviceRGB",
                     "BitsPerComponent" => 8,
                     "Filter" => "FlateDecode",
-                },
-                compressed,
-            );
+                }
+            };
+            let img_stream = Stream::new(dict, compressed);
             let img_id = doc.add_object(img_stream);
             xobject_dict.set(img.name.as_str(), img_id);
         }
-
-        // ── ExtGState for reverse-print blend modes ────────────────
-        let mut gs_dict = lopdf::Dictionary::new();
-        let gs_diff = doc.add_object(dictionary! {
-            "Type" => "ExtGState",
-            "BM" => "Difference",
-        });
-        gs_dict.set("GSDiff", gs_diff);
-
-        let gs_normal = doc.add_object(dictionary! {
-            "Type" => "ExtGState",
-            "BM" => "Normal",
-        });
-        gs_dict.set("GSNormal", gs_normal);
 
         // ── resources ──────────────────────────────────────────────
         let resources_id = doc.add_object(dictionary! {
             "Font" => lopdf::Object::Dictionary(font_dict),
             "XObject" => lopdf::Object::Dictionary(xobject_dict),
-            "ExtGState" => lopdf::Object::Dictionary(gs_dict),
         });
 
-        // ── content stream ─────────────────────────────────────────
-        let content = Content {
-            operations: std::mem::take(&mut self.operations),
-        };
-        let content_bytes = content
-            .encode()
-            .map_err(|e| ZplError::BackendError(format!("Failed to encode content: {}", e)))?;
-        let content_id = doc.add_object(Stream::new(dictionary! {}, content_bytes));
+        // ── pages (one content stream each, shared resources) ──────
+        let mut page_contents = std::mem::take(&mut self.finished_pages);
+        page_contents.push(std::mem::take(&mut self.content));
 
-        // ── page ───────────────────────────────────────────────────
-        let page_id = doc.add_object(dictionary! {
-            "Type" => "Page",
-            "Parent" => pages_id,
-            "MediaBox" => vec![
-                0.into(),
-                0.into(),
-                Object::Real(self.width_pt as f32),
-                Object::Real(self.height_pt as f32),
-            ],
-            "Contents" => content_id,
-            "Resources" => resources_id,
-        });
+        let mut kids: Vec<Object> = Vec::with_capacity(page_contents.len());
+        for content_bytes in page_contents {
+            let content_id = doc.add_object(Stream::new(dictionary! {}, content_bytes));
+            let page_id = doc.add_object(dictionary! {
+                "Type" => "Page",
+                "Parent" => pages_id,
+                "MediaBox" => vec![
+                    0.into(),
+                    0.into(),
+                    Object::Real(self.width_pt as f32),
+                    Object::Real(self.height_pt as f32),
+                ],
+                "Contents" => content_id,
+                "Resources" => resources_id,
+            });
+            kids.push(page_id.into());
+        }
 
         // ── pages tree ─────────────────────────────────────────────
         let pages_dict = dictionary! {
             "Type" => "Pages",
-            "Count" => 1_i64,
-            "Kids" => vec![page_id.into()],
+            "Count" => kids.len() as i64,
+            "Kids" => kids,
         };
         doc.objects.insert(pages_id, Object::Dictionary(pages_dict));
 
@@ -1238,6 +1675,19 @@ impl ZplForgeBackend for PdfNativeBackend {
             "Pages" => pages_id,
         });
         doc.trailer.set("Root", catalog_id);
+
+        // ── document info ──────────────────────────────────────────
+        let mut info = lopdf::Dictionary::new();
+        info.set(
+            "Producer",
+            Object::string_literal(concat!("zpl-forge ", env!("CARGO_PKG_VERSION"))),
+        );
+        if let Some(title) = &self.title {
+            info.set("Title", Object::string_literal(title.as_str()));
+        }
+        let info_id = doc.add_object(Object::Dictionary(info));
+        doc.trailer.set("Info", info_id);
+
         doc.compress();
 
         // ── serialize ──────────────────────────────────────────────

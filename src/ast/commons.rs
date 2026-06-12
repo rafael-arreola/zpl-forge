@@ -1,3 +1,16 @@
+/// 1-D barcode symbologies that share the generic rendering pipeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Barcode1DKind {
+    /// `^BE` — EAN-13 (retail).
+    Ean13,
+    /// `^BU` — UPC-A (retail).
+    UpcA,
+    /// `^B2` — Interleaved 2 of 5 (cartons, ITF-14).
+    Interleaved2of5,
+    /// `^BA` — Code 93.
+    Code93,
+}
+
 /// Represents text justification options in ZPL.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Justification {
@@ -19,6 +32,7 @@ impl From<char> for Justification {
             'R' => Justification::R,
             'J' => Justification::J,
             _ => {
+                #[cfg(feature = "tracing")]
                 tracing::debug!(
                     target: crate::TARGET,
                     "{} is not a valid Justification value, using L as default",
@@ -63,6 +77,7 @@ impl From<char> for YesNo {
             'Y' => YesNo::Y,
             'N' => YesNo::N,
             _ => {
+                #[cfg(feature = "tracing")]
                 tracing::debug!(
                     target: crate::TARGET,
                     "{} is not a valid YesNo value, using N as default",

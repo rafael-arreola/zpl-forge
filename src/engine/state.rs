@@ -30,6 +30,8 @@ pub struct ZplInstructionState {
     pub instruction_type: Option<ZplInstructionType>,
     /// Optional condition for rendering.
     pub condition: Option<(String, String)>,
+    /// `^FB` block formatting for the next text field.
+    pub field_block: Option<crate::engine::common::TextBlock>,
 }
 
 /// Represents absolute positioning for a field.
@@ -129,6 +131,14 @@ pub enum ZplInstructionType {
     QRCode,
     /// Code 39 barcode.
     Code39,
+    /// Data Matrix barcode.
+    DataMatrix,
+    /// PDF417 barcode.
+    Pdf417,
+    /// Generic 1-D barcode (EAN-13, UPC-A, ITF, Code 93).
+    Barcode1D(crate::engine::common::Barcode1DKind),
+    /// Diagonal line.
+    GraphicDiagonal,
     /// Custom color image data.
     CustomImage,
 }

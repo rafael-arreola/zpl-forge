@@ -30,9 +30,17 @@ impl ZplInstructionBuilder {
     /// or if data conversion fails.
     pub fn build(mut self) -> ZplResult<Vec<common::ZplInstruction>> {
         let mut instructions = Vec::new();
+        let mut seen_start_format = false;
 
         for command in self.commands {
             match command {
+                cmd::Command::StartFormat => {
+                    if seen_start_format {
+                        instructions.push(common::ZplInstruction::PageBreak);
+                    }
+                    seen_start_format = true;
+                }
+
                 cmd::Command::FieldOrigin { x, y } => {
                     if let Some(x) = x {
                         self.state.position.x = x;
@@ -89,6 +97,22 @@ impl ZplInstructionBuilder {
 
                 cmd::Command::FieldData { data } => {
                     self.state.value = Some(data);
+                }
+
+                cmd::Command::FieldBlock {
+                    width,
+                    max_lines,
+                    line_spacing,
+                    justification,
+                    indent,
+                } => {
+                    self.state.field_block = Some(common::TextBlock {
+                        width: width.unwrap_or(0),
+                        max_lines: max_lines.unwrap_or(1),
+                        line_spacing: line_spacing.unwrap_or(0) as i32,
+                        justification: justification.map(char::from).unwrap_or('L'),
+                        indent: indent.unwrap_or(0),
+                    });
                 }
 
                 cmd::Command::GraphicBox {
@@ -164,6 +188,7 @@ impl ZplInstructionBuilder {
                             break;
                         }
                         _ => {
+                            #[cfg(feature = "tracing")]
                             tracing::warn!("Unsupported compression type: {}", compression_type);
                             break;
                         }
@@ -241,6 +266,80 @@ impl ZplInstructionBuilder {
                     self.state.instruction_type = Some(state::ZplInstructionType::Code39);
                 }
 
+                cmd::Command::Barcode1D {
+                    kind,
+                    orientation,
+                    height,
+                    interpretation_line,
+                    interpretation_line_above,
+                    check_digit: _,
+                } => {
+                    self.state.attributes.orientation = orientation;
+                    self.state.metrics.height =
+                        height.unwrap_or(if self.state.barcode_metrics.height > 0 {
+                            self.state.barcode_metrics.height
+                        } else {
+                            10
+                        });
+                    self.state.attributes.interpretation_line = interpretation_line;
+                    self.state.attributes.interpretation_above = interpretation_line_above;
+                    self.state.instruction_type =
+                        Some(state::ZplInstructionType::Barcode1D(kind));
+                }
+
+                cmd::Command::GraphicDiagonal {
+                    width,
+                    height,
+                    thickness,
+                    line_color,
+                    diagonal_orientation,
+                } => {
+                    self.state.metrics.width = width.unwrap_or(0);
+                    self.state.metrics.height = height.unwrap_or(0);
+                    self.state.metrics.thickness = thickness.unwrap_or(1);
+                    self.state.attributes.line_color = line_color;
+                    self.state.attributes.mode = diagonal_orientation;
+                    self.state.instruction_type =
+                        Some(state::ZplInstructionType::GraphicDiagonal);
+                }
+
+                cmd::Command::DataMatrix {
+                    orientation,
+                    height,
+                    quality: _,
+                    columns: _,
+                    rows: _,
+                } => {
+                    self.state.attributes.orientation = orientation;
+                    // ^BX height = module size; fall back to ^BY module width.
+                    self.state.metrics.thickness =
+                        height.unwrap_or(if self.state.barcode_metrics.thickness > 0 {
+                            self.state.barcode_metrics.thickness
+                        } else {
+                            2
+                        });
+                    self.state.instruction_type = Some(state::ZplInstructionType::DataMatrix);
+                }
+
+                cmd::Command::Pdf417 {
+                    orientation,
+                    height,
+                    security_level,
+                    columns: _,
+                    rows: _,
+                    truncate: _,
+                } => {
+                    self.state.attributes.orientation = orientation;
+                    self.state.metrics.height =
+                        height.unwrap_or(if self.state.barcode_metrics.height > 0 {
+                            self.state.barcode_metrics.height
+                        } else {
+                            8
+                        });
+                    self.state.params.model = security_level.unwrap_or(0);
+                    self.state.instruction_type = Some(state::ZplInstructionType::Pdf417);
+                }
+
                 cmd::Command::QRCode {
                     orientation,
                     model,
@@ -297,7 +396,7 @@ impl ZplInstructionBuilder {
                                     custom_color: self.state.attributes.custom_line_color.clone(),
                                     rounding: self.state.params.rounding,
                                     reverse_print,
-                                    condition: condition.clone(),
+                                    condition,
                                 });
                             }
                             state::ZplInstructionType::GraphicCircle => {
@@ -309,7 +408,7 @@ impl ZplInstructionBuilder {
                                     color: self.state.attributes.line_color.unwrap_or('B'),
                                     custom_color: self.state.attributes.custom_line_color.clone(),
                                     reverse_print,
-                                    condition: condition.clone(),
+                                    condition,
                                 });
                             }
                             state::ZplInstructionType::GraphicEllipse => {
@@ -322,7 +421,7 @@ impl ZplInstructionBuilder {
                                     color: self.state.attributes.line_color.unwrap_or('B'),
                                     custom_color: self.state.attributes.custom_line_color.clone(),
                                     reverse_print,
-                                    condition: condition.clone(),
+                                    condition,
                                 });
                             }
                             state::ZplInstructionType::GraphicField => {
@@ -334,7 +433,7 @@ impl ZplInstructionBuilder {
                                         height: self.state.metrics.height,
                                         data: g_data,
                                         reverse_print,
-                                        condition: condition.clone(),
+                                        condition,
                                     });
                                 }
                             }
@@ -344,8 +443,8 @@ impl ZplInstructionBuilder {
                                     y,
                                     width: self.state.metrics.width,
                                     height: self.state.metrics.height,
-                                    data: data.clone(),
-                                    condition: condition.clone(),
+                                    data,
+                                    condition,
                                 });
                             }
                             state::ZplInstructionType::Code128 => {
@@ -371,9 +470,9 @@ impl ZplInstructionBuilder {
                                         .unwrap_or('N'),
                                     check_digit: self.state.attributes.check_digit.unwrap_or('N'),
                                     mode: self.state.attributes.mode.unwrap_or('N'),
-                                    data: data.clone(),
+                                    data,
                                     reverse_print,
-                                    condition: condition.clone(),
+                                    condition,
                                 });
                             }
                             state::ZplInstructionType::Code39 => {
@@ -398,9 +497,82 @@ impl ZplInstructionBuilder {
                                         .attributes
                                         .interpretation_above
                                         .unwrap_or('N'),
-                                    data: data.clone(),
+                                    data,
                                     reverse_print,
-                                    condition: condition.clone(),
+                                    condition,
+                                });
+                            }
+                            state::ZplInstructionType::Barcode1D(kind) => {
+                                instructions.push(common::ZplInstruction::Barcode1D {
+                                    kind: *kind,
+                                    x,
+                                    y,
+                                    orientation: self.state.attributes.orientation.unwrap_or('N'),
+                                    height: self.state.metrics.height,
+                                    module_width: if self.state.barcode_metrics.thickness > 0 {
+                                        self.state.barcode_metrics.thickness
+                                    } else {
+                                        2
+                                    },
+                                    interpretation_line: self
+                                        .state
+                                        .attributes
+                                        .interpretation_line
+                                        .unwrap_or('Y'),
+                                    interpretation_line_above: self
+                                        .state
+                                        .attributes
+                                        .interpretation_above
+                                        .unwrap_or('N'),
+                                    data,
+                                    reverse_print,
+                                    condition,
+                                });
+                            }
+                            state::ZplInstructionType::GraphicDiagonal => {
+                                instructions.push(common::ZplInstruction::GraphicDiagonal {
+                                    x,
+                                    y,
+                                    width: self.state.metrics.width,
+                                    height: self.state.metrics.height,
+                                    thickness: self.state.metrics.thickness,
+                                    color: self.state.attributes.line_color.unwrap_or('B'),
+                                    custom_color: self.state.attributes.custom_line_color.clone(),
+                                    diagonal_orientation: self
+                                        .state
+                                        .attributes
+                                        .mode
+                                        .unwrap_or('R'),
+                                    reverse_print,
+                                    condition,
+                                });
+                            }
+                            state::ZplInstructionType::DataMatrix => {
+                                instructions.push(common::ZplInstruction::DataMatrix {
+                                    x,
+                                    y,
+                                    orientation: self.state.attributes.orientation.unwrap_or('N'),
+                                    module_size: self.state.metrics.thickness,
+                                    data,
+                                    reverse_print,
+                                    condition,
+                                });
+                            }
+                            state::ZplInstructionType::Pdf417 => {
+                                instructions.push(common::ZplInstruction::Pdf417 {
+                                    x,
+                                    y,
+                                    orientation: self.state.attributes.orientation.unwrap_or('N'),
+                                    row_height: self.state.metrics.height,
+                                    module_width: if self.state.barcode_metrics.thickness > 0 {
+                                        self.state.barcode_metrics.thickness
+                                    } else {
+                                        2
+                                    },
+                                    security_level: self.state.params.model,
+                                    data,
+                                    reverse_print,
+                                    condition,
                                 });
                             }
                             state::ZplInstructionType::QRCode => {
@@ -416,9 +588,9 @@ impl ZplInstructionBuilder {
                                         .error_correction
                                         .unwrap_or('M'),
                                     mask: self.state.params.mask,
-                                    data: data.clone(),
+                                    data,
                                     reverse_print,
-                                    condition: condition.clone(),
+                                    condition,
                                 });
                             }
                             state::ZplInstructionType::Text => {
@@ -428,10 +600,12 @@ impl ZplInstructionBuilder {
                                     font: self.state.font.font_name,
                                     height: self.state.font.height,
                                     width: self.state.font.width,
-                                    text: data.clone(),
+                                    orientation: self.state.font.orientation.unwrap_or('N'),
+                                    text: data,
                                     reverse_print,
                                     color: self.state.font.color.clone(),
-                                    condition: condition.clone(),
+                                    block: self.state.field_block.take(),
+                                    condition,
                                 });
                             }
                         }
@@ -442,15 +616,18 @@ impl ZplInstructionBuilder {
                             font: self.state.font.font_name,
                             height: self.state.font.height,
                             width: self.state.font.width,
+                            orientation: self.state.font.orientation.unwrap_or('N'),
                             text: data.clone(),
                             reverse_print,
                             color: self.state.font.color.clone(),
+                            block: self.state.field_block.take(),
                             condition,
                         });
                     }
 
                     self.state.instruction_type = None;
                     self.state.reverse = false;
+                    self.state.field_block = None;
                 }
 
                 _ => {}

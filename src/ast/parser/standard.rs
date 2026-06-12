@@ -6,7 +6,7 @@ use nom::{
 
 use super::{Res, Span, opt_param, param, parse_char, parse_f32, parse_u32, parse_xy};
 use crate::ast::cmd;
-use crate::ast::commons::{Justification, YesNo};
+use crate::ast::commons::{Barcode1DKind, Justification, YesNo};
 
 /// ^XA - Start Format
 pub fn cmd_xa(input: Span) -> Res<cmd::Command> {
@@ -371,6 +371,124 @@ pub fn cmd_bx(input: Span) -> Res<cmd::Command> {
             quality,
             columns,
             rows,
+        },
+    ))
+}
+
+/// Shared parser body for 1-D barcodes with the `o,h,f,g,e` parameter shape.
+fn parse_barcode_1d(input: Span, kind: Barcode1DKind) -> Res<cmd::Command> {
+    let (rest, args) = cut(take_till(|c| c == '^')).parse(input)?;
+    let (args_input, orientation) = opt_param(parse_char).parse(args)?;
+    let (args_input, height) = param(parse_u32)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
+    let (args_input, interpretation_line) = param(parse_char)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
+    let (args_input, interpretation_line_above) = param(parse_char)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
+    let (_, check_digit) = param(parse_char)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
+
+    Ok((
+        rest,
+        cmd::Command::Barcode1D {
+            kind,
+            orientation,
+            height,
+            interpretation_line,
+            interpretation_line_above,
+            check_digit,
+        },
+    ))
+}
+
+/// ^BE - EAN-13 Barcode
+pub fn cmd_be(input: Span) -> Res<cmd::Command> {
+    let (input, _) = tag("^BE").parse(input)?;
+    parse_barcode_1d(input, Barcode1DKind::Ean13)
+}
+
+/// ^BU - UPC-A Barcode
+pub fn cmd_bu(input: Span) -> Res<cmd::Command> {
+    let (input, _) = tag("^BU").parse(input)?;
+    parse_barcode_1d(input, Barcode1DKind::UpcA)
+}
+
+/// ^B2 - Interleaved 2 of 5 Barcode
+pub fn cmd_b2(input: Span) -> Res<cmd::Command> {
+    let (input, _) = tag("^B2").parse(input)?;
+    parse_barcode_1d(input, Barcode1DKind::Interleaved2of5)
+}
+
+/// ^BA - Code 93 Barcode
+pub fn cmd_ba(input: Span) -> Res<cmd::Command> {
+    let (input, _) = tag("^BA").parse(input)?;
+    parse_barcode_1d(input, Barcode1DKind::Code93)
+}
+
+/// ^GD - Graphic Diagonal Line
+pub fn cmd_gd(input: Span) -> Res<cmd::Command> {
+    let (input, _) = tag("^GD").parse(input)?;
+    let (rest, args) = cut(take_till(|c| c == '^')).parse(input)?;
+    let (args_input, width) = opt_param(parse_u32).parse(args)?;
+    let (args_input, height) = param(parse_u32)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
+    let (args_input, thickness) = param(parse_u32)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
+    let (args_input, line_color) = param(parse_char)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
+    let (_, diagonal_orientation) = param(parse_char)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
+
+    Ok((
+        rest,
+        cmd::Command::GraphicDiagonal {
+            width,
+            height,
+            thickness,
+            line_color,
+            diagonal_orientation,
+        },
+    ))
+}
+
+/// ^B7 - PDF417 Barcode
+pub fn cmd_b7(input: Span) -> Res<cmd::Command> {
+    let (input, _) = tag("^B7").parse(input)?;
+    let (rest, args) = cut(take_till(|c| c == '^')).parse(input)?;
+    let (args_input, orientation) = opt_param(parse_char).parse(args)?;
+    let (args_input, height) = param(parse_u32)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
+    let (args_input, security_level) = param(parse_u32)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
+    let (args_input, columns) = param(parse_u32)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
+    let (args_input, rows) = param(parse_u32)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
+    let (_, truncate) = param(parse_char)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
+
+    Ok((
+        rest,
+        cmd::Command::Pdf417 {
+            orientation,
+            height,
+            security_level,
+            columns,
+            rows,
+            truncate: truncate.map(YesNo::from),
         },
     ))
 }

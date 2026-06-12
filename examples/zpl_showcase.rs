@@ -3,12 +3,8 @@ use std::sync::Arc;
 use std::time::Instant;
 use zpl_forge::{
     FontManager, Resolution, Unit, ZplEngine, ZplForgeBackend,
-    forge::{
-        pdf::PdfBackend, pdf::png_merge_pages_to_pdf, pdf_native::PdfNativeBackend, png::PngBackend,
-    },
+    forge::{pdf_native::PdfNativeBackend, png::PngBackend},
 };
-
-use rayon::prelude::*;
 
 fn run_test<B>(zpl: &str, width: Unit, height: Unit, backend: B, name: &str)
 where
@@ -106,13 +102,6 @@ pub fn render_01() {
         Unit::Inches(6.0),
         PngBackend::new(),
         "test_01.png",
-    );
-    run_test(
-        zpl_input,
-        Unit::Inches(4.0),
-        Unit::Inches(6.0),
-        PdfBackend::new(),
-        "test_01.pdf",
     );
     run_test(
         zpl_input,
@@ -223,13 +212,6 @@ pub fn render_02() {
         zpl_input,
         Unit::Inches(2.0),
         Unit::Inches(1.0),
-        PdfBackend::new(),
-        "test_02.pdf",
-    );
-    run_test(
-        zpl_input,
-        Unit::Inches(2.0),
-        Unit::Inches(1.0),
         PdfNativeBackend::new(),
         "test_02_native.pdf",
     );
@@ -251,13 +233,6 @@ pub fn render_image() {
         Unit::Inches(6.0),
         PngBackend::new(),
         "test_image.png",
-    );
-    run_test(
-        zpl_input,
-        Unit::Inches(4.0),
-        Unit::Inches(6.0),
-        PdfBackend::new(),
-        "test_image.pdf",
     );
     run_test(
         zpl_input,
@@ -289,13 +264,6 @@ pub fn render_image2() {
         zpl_input,
         Unit::Inches(4.0),
         Unit::Inches(6.0),
-        PdfBackend::new(),
-        "test_image2.pdf",
-    );
-    run_test(
-        zpl_input,
-        Unit::Inches(4.0),
-        Unit::Inches(6.0),
         PdfNativeBackend::new(),
         "test_image2_native.pdf",
     );
@@ -314,13 +282,6 @@ pub fn render_image_color() {
         Unit::Inches(6.0),
         PngBackend::new(),
         "test_image_color.png",
-    );
-    run_test(
-        zpl_input,
-        Unit::Inches(4.0),
-        Unit::Inches(6.0),
-        PdfBackend::new(),
-        "test_image_color.pdf",
     );
     run_test(
         zpl_input,
@@ -349,13 +310,6 @@ pub fn render_image_color2() {
         zpl_input,
         Unit::Inches(4.0),
         Unit::Inches(6.0),
-        PdfBackend::new(),
-        "test_image_color2.pdf",
-    );
-    run_test(
-        zpl_input,
-        Unit::Inches(4.0),
-        Unit::Inches(6.0),
         PdfNativeBackend::new(),
         "test_image_color2_native.pdf",
     );
@@ -379,13 +333,6 @@ pub fn render_image_color3() {
         zpl_input,
         Unit::Inches(4.0),
         Unit::Inches(6.0),
-        PdfBackend::new(),
-        "test_image_color3.pdf",
-    );
-    run_test(
-        zpl_input,
-        Unit::Inches(4.0),
-        Unit::Inches(6.0),
         PdfNativeBackend::new(),
         "test_image_color3_native.pdf",
     );
@@ -404,13 +351,6 @@ pub fn render_image_color4() {
         Unit::Inches(6.0),
         PngBackend::new(),
         "test_image_color4.png",
-    );
-    run_test(
-        zpl_input,
-        Unit::Inches(4.0),
-        Unit::Inches(6.0),
-        PdfBackend::new(),
-        "test_image_color4.pdf",
     );
     run_test(
         zpl_input,
@@ -459,7 +399,7 @@ pub fn render_03() {
         ^GLC#000000
         ^FO50,500^GB700,3,3^FS
 
-        ^FX Barcode and bottom boxes.
+        ^FX Third section with bar code.
         ^BY5,2,270
         ^FO100,550^BC^FD12345678^FS
 
@@ -486,13 +426,6 @@ pub fn render_03() {
         Unit::Inches(6.0),
         PngBackend::new(),
         "test_03.png",
-    );
-    run_test(
-        zpl_input,
-        Unit::Inches(4.0),
-        Unit::Inches(6.0),
-        PdfBackend::new(),
-        "test_03.pdf",
     );
     run_test(
         zpl_input,
@@ -532,13 +465,6 @@ pub fn render_04() {
         Unit::Inches(8.0),
         PngBackend::new(),
         "test_04.png",
-    );
-    run_test(
-        zpl_input,
-        Unit::Inches(4.0),
-        Unit::Inches(8.0),
-        PdfBackend::new(),
-        "test_04.pdf",
     );
     run_test(
         zpl_input,
@@ -611,8 +537,19 @@ pub fn render_ifc_conditional() {
     );
 }
 
+/// Helper function to perform lightweight template variable substitution before rendering.
+fn substitute_zpl_template(template: &str, vars: &HashMap<&str, &str>) -> String {
+    let mut page_zpl = template.to_string();
+    for (key, val) in vars {
+        page_zpl = page_zpl.replace(&format!("{{{{{}}}}}", key), val);
+    }
+    page_zpl
+}
+
 pub fn render_multi_page_pdf() {
-    let total_pages = 1000;
+    const BENCHMARK_PAGE_COUNT: usize = 1000;
+    const PAGE_WIDTH_INCHES: f32 = 4.0;
+    const PAGE_HEIGHT_INCHES: f32 = 3.0;
 
     let zpl_template = "^XA
         ^CF0,40
@@ -937,83 +874,59 @@ pub fn render_multi_page_pdf() {
         "Ithaca, NY 14850",
     ];
 
-    let width = Unit::Inches(4.0);
-    let height = Unit::Inches(3.0);
+    let width = Unit::Inches(PAGE_WIDTH_INCHES);
+    let height = Unit::Inches(PAGE_HEIGHT_INCHES);
     let resolution = Resolution::Dpi203;
 
-    let engine = ZplEngine::new(zpl_template, width, height, resolution)
-        .expect("Failed to parse ZPL template");
-
-    let w_dots = width.to_dots(resolution) as f64;
-    let h_dots = height.to_dots(resolution) as f64;
-    let dpi = resolution.dpi();
-
     println!(
-        "[multi_page_labels.pdf] Rendering {} pages (parallel)...",
-        total_pages
+        "[multi_page_labels.pdf] Preparing ZPL data for {} pages...",
+        BENCHMARK_PAGE_COUNT
     );
-    let render_start = Instant::now();
+    let prepare_start = Instant::now();
+    let mut large_zpl = String::with_capacity(zpl_template.len() * BENCHMARK_PAGE_COUNT);
 
-    let pages: Vec<Vec<u8>> = (0..total_pages)
-        .into_par_iter()
-        .map(|i| {
-            let mut vars = HashMap::new();
-            vars.insert("order_id".to_string(), format!("ORD-{}", 1001 + i));
-            vars.insert("name".to_string(), names[i % names.len()].to_string());
-            vars.insert(
-                "address".to_string(),
-                addresses[i % addresses.len()].to_string(),
-            );
-            vars.insert("city".to_string(), cities[i % cities.len()].to_string());
-            vars.insert("page".to_string(), format!("{}", i + 1));
-            vars.insert("total".to_string(), format!("{}", total_pages));
+    for i in 0..BENCHMARK_PAGE_COUNT {
+        let mut vars = HashMap::new();
+        let order_id = format!("ORD-{}", 1001 + i);
+        let name = names[i % names.len()];
+        let address = addresses[i % addresses.len()];
+        let city = cities[i % cities.len()];
+        let page_num = format!("{}", i + 1);
+        let total_num = format!("{}", BENCHMARK_PAGE_COUNT);
 
-            engine
-                .render(PngBackend::new(), &vars)
-                .expect("Failed to render page")
-        })
-        .collect();
+        vars.insert("order_id", order_id.as_str());
+        vars.insert("name", name);
+        vars.insert("address", address);
+        vars.insert("city", city);
+        vars.insert("page", page_num.as_str());
+        vars.insert("total", total_num.as_str());
 
-    let render_duration = render_start.elapsed();
-    println!(
-        "[multi_page_labels.pdf] All {} pages rendered in {:.2?} ({:.1} ms/page)",
-        total_pages,
-        render_duration,
-        render_duration.as_millis() as f64 / total_pages as f64
-    );
-
-    let compression_levels = [
-        ("fast", flate2::Compression::fast()),
-        ("default", flate2::Compression::default()),
-        ("best", flate2::Compression::best()),
-    ];
-
-    for (level_name, compression) in compression_levels {
-        println!(
-            "[multi_page_labels_{}.pdf] Merging into multi-page PDF...",
-            level_name
-        );
-        let merge_start = Instant::now();
-        let pdf_bytes = png_merge_pages_to_pdf(&pages, w_dots, h_dots, dpi, compression)
-            .expect("Failed to merge pages into PDF");
-        let merge_duration = merge_start.elapsed();
-
-        let output_path = format!("examples/multi_page_labels_{}.pdf", level_name);
-        std::fs::write(&output_path, &pdf_bytes).expect("Failed to write PDF");
-
-        let total_duration = render_start.elapsed();
-        println!(
-            "[multi_page_labels_{}.pdf] PDF merge took: {:.2?}",
-            level_name, merge_duration
-        );
-        println!(
-            "[multi_page_labels_{}.pdf] Saved {} pages ({:.2} MB) | Total time: {:.2?}",
-            level_name,
-            total_pages,
-            pdf_bytes.len() as f64 / (1024.0 * 1024.0),
-            total_duration
-        );
+        let page_zpl = substitute_zpl_template(zpl_template, &vars);
+        large_zpl.push_str(&page_zpl);
     }
+    println!(
+        "[multi_page_labels.pdf] ZPL generation completed in {:.2?}",
+        prepare_start.elapsed()
+    );
+
+    println!("[multi_page_labels.pdf] Parsing and rendering multi-page PDF natively...");
+    let render_start = Instant::now();
+    let engine = ZplEngine::new(&large_zpl, width, height, resolution)
+        .expect("Failed to parse concatenated ZPL data");
+    let pdf_bytes = engine
+        .render(PdfNativeBackend::new(), &HashMap::new())
+        .expect("Failed to render native PDF pages");
+    let render_duration = render_start.elapsed();
+
+    std::fs::write("examples/multi_page_labels.pdf", &pdf_bytes).expect("Failed to write PDF file");
+
+    println!(
+        "[multi_page_labels.pdf] Saved {} vector PDF pages ({:.2} MB) | Total time: {:.2?} ({:.1} ms/page)",
+        BENCHMARK_PAGE_COUNT,
+        pdf_bytes.len() as f64 / (1024.0 * 1024.0),
+        render_duration,
+        render_duration.as_millis() as f64 / BENCHMARK_PAGE_COUNT as f64
+    );
 }
 
 pub fn render_custom_fonts() {
@@ -1097,15 +1010,6 @@ pub fn render_custom_fonts() {
         &font_manager,
         PngBackend::new(),
         "custom_fonts_output.png",
-    );
-    render_fonts(
-        zpl_input,
-        width,
-        height,
-        resolution,
-        &font_manager,
-        PdfBackend::new(),
-        "custom_fonts_output.pdf",
     );
     render_fonts(
         zpl_input,
