@@ -1,4 +1,10 @@
-use crate::{ZplError, ZplResult};
+//! High-level decoding and data manipulation utilities for ZPL assets.
+
+#[cfg(any(feature = "png", feature = "pdf"))]
+use crate::ZplError;
+#[cfg(any(feature = "png", feature = "pdf"))]
+use crate::ZplResult;
+#[cfg(any(feature = "png", feature = "pdf"))]
 use image::GenericImageView;
 
 /// Decodes ZPL compressed image data, typically used in the `^GF` (Graphic Field) command.
@@ -177,6 +183,7 @@ pub fn zpl_decode(encoded_str: &str, bytes_per_row: usize) -> Vec<u8> {
 /// 1. The encoded string (hexadecimal with ASCII compression).
 /// 2. Total number of bytes in the bitmap.
 /// 3. Bytes per row (required by the `^GF` command).
+#[cfg(any(feature = "png", feature = "pdf"))]
 pub fn zpl_encode(image_bytes: &[u8]) -> ZplResult<(String, usize, usize)> {
     let img = image::load_from_memory(image_bytes)
         .map_err(|e| ZplError::ImageError(format!("Failed to load image from bytes: {}", e)))?;
@@ -200,7 +207,12 @@ pub fn zpl_encode(image_bytes: &[u8]) -> ZplResult<(String, usize, usize)> {
         }
     }
 
-    let hex_str = hex::encode_upper(bitmap);
+    const HEX_UPPER: &[u8; 16] = b"0123456789ABCDEF";
+    let mut hex_str = String::with_capacity(bitmap.len() * 2);
+    for byte in &bitmap {
+        hex_str.push(HEX_UPPER[(byte >> 4) as usize] as char);
+        hex_str.push(HEX_UPPER[(byte & 0x0F) as usize] as char);
+    }
     let mut encoded = String::new();
     let chars: Vec<char> = hex_str.chars().collect();
 

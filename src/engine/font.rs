@@ -5,7 +5,7 @@ use ab_glyph::FontArc;
 
 /// Default fallback font bytes embedded in the binary.
 /// This guarantees the library runs on any OS/Platform without C dependencies.
-const DEFAULT_FONT_BYTES: &[u8] = include_bytes!("../assets/Oswald-Regular.ttf");
+const DEFAULT_FONT_BYTES: &[u8] = include_bytes!("../assets/IosevkaTermSlab-Regular.ttf");
 
 /// List of valid ZPL font identifiers (A-Z and 0-9).
 const FONT_MAP: &[char] = &[
@@ -31,8 +31,8 @@ impl Default for FontManager {
     /// Creates a `FontManager` with a lightweight open-source default font
     /// registered for all identifiers ('A' to '9').
     ///
-    /// Uses Inconsolata (SIL Open Font License) embedded directly in the binary,
-    /// ensuring zero native dependencies on the host OS.
+    /// Uses Iosevka Term Slab (SIL Open Font License, Version 1.1)
+    /// embedded directly in the binary, ensuring zero native dependencies on the host OS.
     fn default() -> Self {
         let mut current = Self {
             font_map: HashMap::new(),
@@ -41,7 +41,7 @@ impl Default for FontManager {
         };
 
         // Register the embedded font for all alphanumeric ZPL identifiers
-        let _ = current.register_font("Oswald", DEFAULT_FONT_BYTES, 'A', '9');
+        let _ = current.register_font("Iosevka Term Slab", DEFAULT_FONT_BYTES, 'A', '9');
 
         current
     }
@@ -98,10 +98,10 @@ impl FontManager {
     /// let mut font_manager = FontManager::default();
     ///
     /// // Load your font file bytes
-    /// // let font_bytes = std::fs::read("fonts/Oswald-Regular.ttf")?;
+    /// // let font_bytes = std::fs::read("fonts/IosevkaTermSlab-Regular.ttf")?;
     ///
     /// // Register it for a range of ZPL identifiers (e.g., from 'A' to 'Z')
-    /// // font_manager.register_font("Oswald", &font_bytes, 'A', 'Z')?;
+    /// // font_manager.register_font("Iosevka Term Slab", &font_bytes, 'A', 'Z')?;
     /// # Ok(())
     /// # }
     /// ```

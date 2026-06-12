@@ -20,6 +20,6 @@ mod intr;
 mod state;
 
 pub use backend::ZplForgeBackend;
-pub use common::{Resolution, Unit, ZplInstruction};
+pub use common::{Barcode1DKind, Resolution, TextBlock, Unit, ZplInstruction};
 pub use engine::ZplEngine;
 pub use font::FontManager;

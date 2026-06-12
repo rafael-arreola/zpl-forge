@@ -1,7 +1,17 @@
 name: Publish to Crates.io
 
 on:
-  workflow_dispatch: # Permite disparar la acción manualmente con un clic
+  workflow_dispatch:
+    inputs:
+      version_bump:
+        description: "Tipo de incremento de versión (SemVer)"
+        required: true
+        default: "patch"
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
 
 jobs:
   publish:
@@ -16,16 +26,80 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v5
+        with:
+          persist-credentials: true
 
       - name: Setup Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Extract Crate Version
-        id: crate_version
-        # Lee la versión automáticamente desde tu Cargo.toml
+      - name: Bump Version in Cargo.toml
+        id: bump_version
         run: |
-          VERSION=$(cargo read-manifest | jq -r .version)
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          BUMP="${{ github.event.inputs.version_bump }}"
+
+          # Python script to parse Cargo.toml and bump the version
+          python3 -c "
+          import re
+          import sys
+
+          bump = '$BUMP'
+          with open('Cargo.toml', 'r') as f:
+              content = f.read()
+
+          match = re.search(r'^version\s*=\s*\"([^\"]+)\"', content, re.MULTILINE)
+          if not match:
+              print('Could not find version in Cargo.toml', file=sys.stderr)
+              sys.exit(1)
+
+          current_version = match.group(1)
+          major, minor, patch = map(int, current_version.split('.'))
+
+          if bump == 'major':
+              major += 1
+              minor = 0
+              patch = 0
+          elif bump == 'minor':
+              minor += 1
+              patch = 0
+          elif bump == 'patch':
+              patch += 1
+
+          new_version = f'{major}.{minor}.{patch}'
+          print(f'Bumping from {current_version} to {new_version}')
+
+          # Replace the version line
+          content = re.sub(r'^version\s*=\s*\"[^\"]+\"', f'version = \"{new_version}\"', content, flags=re.MULTILINE)
+
+          with open('Cargo.toml', 'w') as f:
+              f.write(content)
+
+          # Also update README.md version references
+          try:
+              with open('README.md', 'r') as rf:
+                  readme = rf.read()
+              readme = readme.replace(f'zpl-forge = \"{current_version}\"', f'zpl-forge = \"{new_version}\"')
+              readme = readme.replace(f'version = \"{current_version}\"', f'version = \"{new_version}\"')
+              with open('README.md', 'w') as wf:
+                  wf.write(readme)
+              print(f'Successfully updated README.md version references from {current_version} to {new_version}')
+          except Exception as e:
+              print(f'Warning: Could not update README.md: {e}')
+
+          # Write to github output
+          with open(sys.argv[1], 'a') as out:
+              out.write(f'new_version={new_version}\n')
+          " "$GITHUB_OUTPUT"
+
+      - name: Update Cargo.lock
+        run: cargo check
+
+      - name: Commit and Push Version Bump
+        run: |
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock README.md
+          git commit -m "chore(release): bump version to v${{ steps.bump_version.outputs.new_version }}"
+          git push
 
       - name: Publish to crates.io
         env:
@@ -33,9 +107,8 @@ jobs:
         run: cargo publish
 
       - name: Create GitHub Release
-        # Crea automáticamente un Release y un Tag (ej. v0.1.2) en GitHub con notas autogeneradas
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.crate_version.outputs.version }}
-          name: Release v${{ steps.crate_version.outputs.version }}
+          tag_name: v${{ steps.bump_version.outputs.new_version }}
+          name: Release v${{ steps.bump_version.outputs.new_version }}
           generate_release_notes: true

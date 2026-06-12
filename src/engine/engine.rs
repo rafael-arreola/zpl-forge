@@ -1,11 +1,96 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use ab_glyph::{Font, PxScale, ScaleFont};
+
 use crate::{
     FontManager, ZplError, ZplResult,
     ast::parse_zpl,
     engine::{backend, common, font, intr},
 };
+
+/// Measures the advance width of `text` in dots for the given ZPL font spec.
+fn measure_text_dots(
+    fm: &font::FontManager,
+    font_char: char,
+    height: Option<u32>,
+    width: Option<u32>,
+    text: &str,
+) -> u32 {
+    let mut buf = [0; 4];
+    let font_str = font_char.encode_utf8(&mut buf);
+    let font = match fm.get_font(font_str).or_else(|| fm.get_font("0")) {
+        Some(f) => f,
+        None => return 0,
+    };
+    let scale_y = height.unwrap_or(9) as f32;
+    let scale_x = width.unwrap_or(scale_y as u32) as f32;
+    let scaled = font.as_scaled(PxScale {
+        x: scale_x,
+        y: scale_y,
+    });
+    let mut w = 0.0_f32;
+    let mut last = None;
+    for c in text.chars() {
+        let gid = font.glyph_id(c);
+        if let Some(prev) = last {
+            w += scaled.kern(prev, gid);
+        }
+        w += scaled.h_advance(gid);
+        last = Some(gid);
+    }
+    w.ceil() as u32
+}
+
+/// Greedy word-wrap for `^FB`: fits words into `max_width` dots, hard-breaking
+/// words that are longer than a full line. `\&` acts as an explicit line break.
+fn wrap_text_block<F: Fn(&str) -> u32>(text: &str, max_width: u32, measure: F) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+
+    for segment in text.split("\\&") {
+        if max_width == 0 {
+            lines.push(segment.trim().to_string());
+            continue;
+        }
+
+        let mut current = String::new();
+        for word in segment.split_whitespace() {
+            let candidate = if current.is_empty() {
+                word.to_string()
+            } else {
+                format!("{} {}", current, word)
+            };
+
+            if measure(&candidate) <= max_width {
+                current = candidate;
+                continue;
+            }
+
+            if !current.is_empty() {
+                lines.push(std::mem::take(&mut current));
+            }
+
+            // The word alone may still overflow: hard-break it by characters.
+            if measure(word) > max_width {
+                let mut piece = String::new();
+                for ch in word.chars() {
+                    piece.push(ch);
+                    if measure(&piece) > max_width && piece.chars().count() > 1 {
+                        piece.pop();
+                        lines.push(std::mem::take(&mut piece));
+                        piece.push(ch);
+                    }
+                }
+                current = piece;
+            } else {
+                current = word.to_string();
+            }
+        }
+        lines.push(current);
+    }
+
+    lines
+}
 
 /// The main entry point for processing and rendering ZPL labels.
 ///
@@ -127,7 +212,13 @@ impl ZplEngine {
         backend.setup_font_manager(&font_manager);
 
         for instruction in &self.instructions {
+            if let common::ZplInstruction::PageBreak = instruction {
+                backend.new_page()?;
+                continue;
+            }
+
             let condition = match instruction {
+                common::ZplInstruction::PageBreak => continue,
                 common::ZplInstruction::Text { condition, .. } => condition,
                 common::ZplInstruction::GraphicBox { condition, .. } => condition,
                 common::ZplInstruction::GraphicCircle { condition, .. } => condition,
@@ -137,6 +228,10 @@ impl ZplEngine {
                 common::ZplInstruction::Code128 { condition, .. } => condition,
                 common::ZplInstruction::QRCode { condition, .. } => condition,
                 common::ZplInstruction::Code39 { condition, .. } => condition,
+                common::ZplInstruction::DataMatrix { condition, .. } => condition,
+                common::ZplInstruction::Pdf417 { condition, .. } => condition,
+                common::ZplInstruction::Barcode1D { condition, .. } => condition,
+                common::ZplInstruction::GraphicDiagonal { condition, .. } => condition,
             };
 
             if let Some((var, expected)) = condition
@@ -146,6 +241,7 @@ impl ZplEngine {
             }
 
             match instruction {
+                common::ZplInstruction::PageBreak => {}
                 common::ZplInstruction::Text {
                     condition: _,
                     x,
@@ -153,20 +249,77 @@ impl ZplEngine {
                     font,
                     height,
                     width,
+                    orientation,
                     text,
                     reverse_print,
                     color,
+                    block,
                 } => {
-                    backend.draw_text(
-                        *x,
-                        *y,
-                        *font,
-                        *height,
-                        *width,
-                        &replace_vars(text, variables),
-                        *reverse_print,
-                        color.clone(),
-                    )?;
+                    let resolved = replace_vars(text, variables);
+
+                    let Some(b) = block else {
+                        backend.draw_text(
+                            *x,
+                            *y,
+                            *font,
+                            *height,
+                            *width,
+                            *orientation,
+                            &resolved,
+                            *reverse_print,
+                            color.clone(),
+                        )?;
+                        continue;
+                    };
+
+                    // ^FB: wrap into lines, justify, and place each line
+                    // according to the field orientation.
+                    let measure =
+                        |s: &str| measure_text_dots(&font_manager, *font, *height, *width, s);
+                    let lines = wrap_text_block(&resolved, b.width, measure);
+                    let n_lines = lines.len().min(b.max_lines.max(1) as usize);
+
+                    let font_h = height.unwrap_or(9) as i32;
+                    let line_advance = (font_h + b.line_spacing).max(1);
+                    let block_span = (n_lines as i32 - 1) * line_advance;
+
+                    for (i, line) in lines.iter().take(n_lines).enumerate() {
+                        if line.is_empty() {
+                            continue;
+                        }
+                        let lw = measure(line) as i32;
+                        let indent = if i > 0 { b.indent as i32 } else { 0 };
+                        let avail = (b.width as i32 - indent).max(0);
+                        let jx = indent
+                            + match b.justification {
+                                'C' => (avail - lw).max(0) / 2,
+                                'R' => (avail - lw).max(0),
+                                _ => 0,
+                            };
+                        let ly = i as i32 * line_advance;
+
+                        // Cell top-left offset, rotated with the field.
+                        let (dx, dy) = match orientation {
+                            'R' => (block_span - ly, jx),
+                            'I' => (b.width as i32 - jx - lw, block_span - ly),
+                            'B' => (ly, b.width as i32 - jx - lw),
+                            _ => (jx, ly),
+                        };
+
+                        let fx = (*x as i32 + dx).max(0) as u32;
+                        let fy = (*y as i32 + dy).max(0) as u32;
+                        backend.draw_text(
+                            fx,
+                            fy,
+                            *font,
+                            *height,
+                            *width,
+                            *orientation,
+                            line,
+                            *reverse_print,
+                            color.clone(),
+                        )?;
+                    }
                 }
                 common::ZplInstruction::GraphicBox {
                     condition: _,
@@ -293,6 +446,96 @@ impl ZplEngine {
                         *magnification,
                         *error_correction,
                         *mask,
+                        &replace_vars(data, variables),
+                        *reverse_print,
+                    )?;
+                }
+                common::ZplInstruction::Barcode1D {
+                    condition: _,
+                    kind,
+                    x,
+                    y,
+                    orientation,
+                    height,
+                    module_width,
+                    interpretation_line,
+                    interpretation_line_above,
+                    data,
+                    reverse_print,
+                } => {
+                    backend.draw_barcode_1d(
+                        *kind,
+                        *x,
+                        *y,
+                        *orientation,
+                        *height,
+                        *module_width,
+                        *interpretation_line,
+                        *interpretation_line_above,
+                        &replace_vars(data, variables),
+                        *reverse_print,
+                    )?;
+                }
+                common::ZplInstruction::GraphicDiagonal {
+                    condition: _,
+                    x,
+                    y,
+                    width,
+                    height,
+                    thickness,
+                    color,
+                    custom_color,
+                    diagonal_orientation,
+                    reverse_print,
+                } => {
+                    backend.draw_graphic_diagonal(
+                        *x,
+                        *y,
+                        *width,
+                        *height,
+                        *thickness,
+                        *color,
+                        custom_color.clone(),
+                        *diagonal_orientation,
+                        *reverse_print,
+                    )?;
+                }
+                common::ZplInstruction::DataMatrix {
+                    condition: _,
+                    x,
+                    y,
+                    orientation,
+                    module_size,
+                    data,
+                    reverse_print,
+                } => {
+                    backend.draw_datamatrix(
+                        *x,
+                        *y,
+                        *orientation,
+                        *module_size,
+                        &replace_vars(data, variables),
+                        *reverse_print,
+                    )?;
+                }
+                common::ZplInstruction::Pdf417 {
+                    condition: _,
+                    x,
+                    y,
+                    orientation,
+                    row_height,
+                    module_width,
+                    security_level,
+                    data,
+                    reverse_print,
+                } => {
+                    backend.draw_pdf417(
+                        *x,
+                        *y,
+                        *orientation,
+                        *row_height,
+                        *module_width,
+                        *security_level,
                         &replace_vars(data, variables),
                         *reverse_print,
                     )?;
