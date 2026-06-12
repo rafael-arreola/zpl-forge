@@ -67,9 +67,7 @@ The library provides two backends for different needs.
 Best for web previews or raster printing. Gated under the `png` cargo feature.
 
 ```rust
-use std::collections::HashMap;
-use zpl_forge::{ZplEngine, Unit, Resolution};
-use zpl_forge::forge::png::PngBackend;
+use zpl_forge::{ZplEngine, PngBackend};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let zpl = "^XA^FO50,50^A0N,50,50^FDHello World^FS^XZ";
@@ -99,9 +97,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 Outputs selectable text and native vector graphics. Ultra-fast, extremely small file size, and requires zero rasterization. Gated under the `pdf` cargo feature.
 
 ```rust
-use std::collections::HashMap;
-use zpl_forge::{ZplEngine, Unit, Resolution};
-use zpl_forge::forge::pdf_native::PdfNativeBackend;
+use zpl_forge::{ZplEngine, PdfNativeBackend};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let zpl = "^XA^FO50,50^A0N,50,50^FDSelectable Text!^FS^XZ";
@@ -133,9 +129,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 Inject dynamic data into your ZPL without extra allocations. Simply use the `{{variable_name}}` syntax in your ZPL code and pass a variables map to `.render()`.
 
 ```rust
-use std::collections::HashMap;
-use zpl_forge::{ZplEngine, Unit, Resolution};
-use zpl_forge::forge::png::PngBackend;
+use zpl_forge::{ZplEngine, PdfBackend};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let zpl = "^XA^FO50,50^A0N,50,50^FDHello {{NAME}}^FS^XZ";
