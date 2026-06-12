@@ -1,0 +1,91 @@
+name: "Release: Create Git Tag & Publish"
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  create-tag:
+    name: Generate Tag & Publish Crate
+    runs-on: ubuntu-latest
+    environment: deployment-crates
+    permissions:
+      contents: write # Requerido para crear y subir etiquetas y releases en GitHub
+
+    steps:
+      - name: Manual Git Checkout
+        run: |
+          # Clonar manualmente el repositorio usando el token de acceso
+          git clone "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" .
+          git checkout ${{ github.ref_name }}
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify If Commit Is A Release
+        id: check_release
+        run: |
+          # Obtener el mensaje del último commit integrado en main
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+          echo "=== ULTIMO COMMIT DETECTADO EN MAIN ==="
+          echo "$COMMIT_MSG"
+          echo "========================================"
+
+          # Verificar si el commit contiene la firma oficial de nuestro workflow manual de release
+          if echo "$COMMIT_MSG" | grep -q "chore(release):"; then
+            echo "Firma 'chore(release):' encontrada. Procediendo con el etiquetado y publicación."
+            echo "is_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "Firma 'chore(release):' NO encontrada. Esta es una subida normal a main. Cancelando etiquetado."
+            echo "is_release=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Extract Version from Cargo.toml
+        if: steps.check_release.outputs.is_release == 'true'
+        id: get_version
+        run: |
+          # Extraer versión usando el Python 3 nativo del sistema
+          VERSION=$(python3 -c '
+          import re
+          with open("Cargo.toml", "r") as f:
+              content = f.read()
+          match = re.search(r"\[package\].*?version\s*=\s*\"([^\"]+)\"", content, re.DOTALL)
+          if match:
+              print(match.group(1))
+          ')
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create and Push Git Tag
+        if: steps.check_release.outputs.is_release == 'true'
+        run: |
+          VERSION="${{ steps.get_version.outputs.VERSION }}"
+          TAG_NAME="v${VERSION}"
+
+          # Sincronizar etiquetas con el servidor de GitHub para evitar colisiones
+          git fetch --tags
+
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            echo "La etiqueta $TAG_NAME ya existe en el repositorio. Omitiendo la creación."
+          else
+            git config --global user.name "github-actions[bot]"
+            git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+            git tag -a "$TAG_NAME" -m "Release version ${TAG_NAME}"
+            git push origin "$TAG_NAME"
+            echo "Etiqueta $TAG_NAME creada y empujada de forma exitosa."
+          fi
+
+      - name: Publish to crates.io
+        if: steps.check_release.outputs.is_release == 'true'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: cargo publish
+
+      - name: Create GitHub Release
+        if: steps.check_release.outputs.is_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.get_version.outputs.VERSION }}
+          name: Release v${{ steps.get_version.outputs.VERSION }}
+          generate_release_notes: true

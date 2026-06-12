@@ -1,0 +1,158 @@
+name: "Release: Create Pull Request"
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_bump:
+        description: "Tipo de incremento de versión (SemVer)"
+        required: true
+        default: "patch"
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      custom_version:
+        description: "Versión personalizada (Opcional, sobreescribe el incremento SemVer. Ej. 1.0.0)"
+        required: false
+        type: string
+
+jobs:
+  create-pr:
+    name: Bump Version & Create PR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Manual Git Checkout
+        run: |
+          # Clonar de forma manual el repositorio usando el token de GitHub
+          git clone "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" .
+          git checkout ${{ github.ref_name }}
+
+      - name: Bump Version in Cargo.toml & README.md
+        id: bump_version
+        run: |
+          # Usar el intérprete de Python 3 preinstalado nativamente en el runner de Ubuntu
+          python3 -c '
+          import sys, re
+
+          bump = "${{ github.event.inputs.version_bump }}"
+          custom = "${{ github.event.inputs.custom_version }}".strip()
+
+          with open("Cargo.toml", "r") as f:
+              lines = f.readlines()
+
+          in_package = False
+          new_version = None
+          current_version = None
+
+          for i, line in enumerate(lines):
+              stripped = line.strip()
+              if stripped.startswith("[package]"):
+                  in_package = True
+                  continue
+              elif stripped.startswith("["):
+                  in_package = False
+
+              if in_package and stripped.startswith("version"):
+                  match = re.search(r"version\s*=\s*\"([^\"]+)\"", line)
+                  if match:
+                      current_version = match.group(1)
+                      if custom:
+                          new_version = custom
+                      else:
+                          parts = current_version.split(".")
+                          major = int(parts[0])
+                          minor = int(parts[1])
+                          patch = int(parts[2])
+
+                          if bump == "major":
+                              major += 1
+                              minor = 0
+                              patch = 0
+                          elif bump == "minor":
+                              minor += 1
+                              patch = 0
+                          elif bump == "patch":
+                              patch += 1
+
+                          new_version = f"{major}.{minor}.{patch}"
+
+                      lines[i] = f"version = \"{new_version}\"\n"
+                      break
+
+          if not new_version or not current_version:
+              print("Error: No se pudo parsear el bloque [package] o el campo version en Cargo.toml", file=sys.stderr)
+              sys.exit(1)
+
+          with open("Cargo.toml", "w") as f:
+              f.writelines(lines)
+
+          # También actualizar las referencias de versión en el README.md
+          try:
+              with open("README.md", "r") as rf:
+                  readme = rf.read()
+              readme = readme.replace(f"zpl-forge = \"{current_version}\"", f"zpl-forge = \"{new_version}\"")
+              readme = readme.replace(f"version = \"{current_version}\"", f"version = \"{new_version}\"")
+              with open("README.md", "w") as wf:
+                  wf.write(readme)
+              print(f"Successfully updated README.md version references from {current_version} to {new_version}")
+          except Exception as e:
+              print(f"Warning: Could not update README.md: {e}")
+
+          print(f"NEW_VERSION={new_version}")
+          with open(sys.argv[1], "a") as env:
+              env.write(f"NEW_VERSION={new_version}\n")
+          ' "$GITHUB_OUTPUT"
+
+      - name: Validate Compilation
+        run: |
+          # El runner de Ubuntu ya posee Rust y Cargo preinstalados por defecto, actualiza el Cargo.lock
+          cargo check --all-features
+
+      - name: Commit and Push Release Branch
+        id: git_push
+        run: |
+          NEW_VER="${{ steps.bump_version.outputs.NEW_VERSION }}"
+          BRANCH_NAME="release/v${NEW_VER}"
+
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git checkout -b "$BRANCH_NAME"
+          git add Cargo.toml Cargo.lock README.md
+
+          if git diff --quiet --staged; then
+            echo "Sin cambios detectados"
+          else
+            git commit -m "chore(release): bump version to v${NEW_VER}"
+            git push origin "$BRANCH_NAME" --force
+            echo "Pushed branch $BRANCH_NAME successfully."
+          fi
+          echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_OUTPUT
+
+      - name: Create Pull Request via GitHub CLI
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NEW_VER="${{ steps.bump_version.outputs.NEW_VERSION }}"
+          BRANCH_NAME="${{ steps.git_push.outputs.BRANCH_NAME }}"
+
+          # Verificar si ya existe un PR abierto para esa rama usando GitHub CLI
+          EXISTING_PR=$(gh pr list --head "$BRANCH_NAME" --state open --json number -q '.[0].number')
+
+          if [ -z "$EXISTING_PR" ]; then
+            gh pr create \
+              --title "chore(release): bump version to v${NEW_VER}" \
+              --body "### 🚀 Release Automático v${NEW_VER}
+
+              Este Pull Request fue creado de forma automatizada por el pipeline de release.
+              Al realizar el merge de este PR en la rama \`main\`, se disparará automáticamente el proceso de etiquetado y publicación para consolidar la versión \`v${NEW_VER}\` de la biblioteca." \
+              --head "$BRANCH_NAME" \
+              --base main
+          else
+            echo "Ya existe un Pull Request abierto (#$EXISTING_PR) para la rama $BRANCH_NAME"
+          fi
