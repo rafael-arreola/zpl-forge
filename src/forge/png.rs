@@ -9,16 +9,21 @@ use std::sync::Arc;
 
 use ab_glyph::{Font, PxScale, ScaleFont};
 use base64::{Engine as _, engine::general_purpose};
-use image::{ImageBuffer, Rgb, RgbImage, imageops::overlay};
+use image::{
+    ImageBuffer, Rgb, RgbImage, Rgba, RgbaImage,
+    imageops::{overlay, rotate90, rotate180, rotate270},
+};
 use imageproc::drawing::{
-    draw_filled_circle_mut, draw_filled_ellipse_mut, draw_filled_rect_mut, draw_text_mut,
+    draw_filled_circle_mut, draw_filled_ellipse_mut, draw_filled_rect_mut, draw_polygon_mut,
+    draw_text_mut,
 };
+use imageproc::point::Point;
 use imageproc::rect::Rect;
-use rxing::{
-    BarcodeFormat, EncodeHintType, EncodeHintValue, EncodeHints, MultiFormatWriter, Writer,
-};
+use rxing::common::BitMatrix;
+use rxing::{BarcodeFormat, EncodeHintType, EncodeHintValue, EncodeHints};
 
-use crate::engine::{FontManager, ZplForgeBackend};
+use super::{barcode_1d_format, barcode_cache};
+use crate::engine::{Barcode1DKind, FontManager, ZplForgeBackend};
 use crate::{ZplError, ZplResult};
 
 /// A rendering backend that produces PNG images.
@@ -200,6 +205,7 @@ impl ZplForgeBackend for PngBackend {
         font: char,
         height: Option<u32>,
         width: Option<u32>,
+        orientation: char,
         text: &str,
         _reverse_print: bool,
         color: Option<String>,
@@ -210,9 +216,9 @@ impl ZplForgeBackend for PngBackend {
 
         let font_data = match self.font_manager.as_ref() {
             Some(fm) => match fm.get_font(&font.to_string()) {
-                Some(f) => f,
+                Some(f) => f.clone(),
                 None => match fm.get_font("0") {
-                    Some(f) => f,
+                    Some(f) => f.clone(),
                     None => return Err(ZplError::FontError(format!("Font not found: {}", font))),
                 },
             },
@@ -228,15 +234,43 @@ impl ZplForgeBackend for PngBackend {
 
         let text_color = self.parse_hex_color(&color);
 
-        draw_text_mut(
-            &mut self.canvas,
-            text_color,
-            x as i32,
-            y as i32,
-            scale,
-            font_data,
-            text,
-        );
+        if !matches!(orientation, 'R' | 'I' | 'B') {
+            draw_text_mut(
+                &mut self.canvas,
+                text_color,
+                x as i32,
+                y as i32,
+                scale,
+                &font_data,
+                text,
+            );
+            return Ok(());
+        }
+
+        // Rotated text: render on a temporary transparent surface, rotate it, and blit
+        // non-transparent pixels so the background stays transparent.
+        let text_w = self.get_text_width(text, font, height, width).max(1);
+        let font_h = (scale_y as u32).max(1);
+        let mut tmp = RgbaImage::from_pixel(text_w, font_h, Rgba([0, 0, 0, 0]));
+        let text_rgba = Rgba([text_color.0[0], text_color.0[1], text_color.0[2], 255]);
+        draw_text_mut(&mut tmp, text_rgba, 0, 0, scale, &font_data, text);
+
+        let rotated = match orientation {
+            'R' => rotate90(&tmp),
+            'I' => rotate180(&tmp),
+            _ => rotate270(&tmp),
+        };
+
+        let (cw, ch) = self.canvas.dimensions();
+        for (sx, sy, p) in rotated.enumerate_pixels() {
+            if p.0[3] > 0 {
+                let dx = x.saturating_add(sx);
+                let dy = y.saturating_add(sy);
+                if dx < cw && dy < ch {
+                    self.canvas[(dx, dy)] = Rgb([p.0[0], p.0[1], p.0[2]]);
+                }
+            }
+        }
         Ok(())
     }
 
@@ -479,7 +513,7 @@ impl ZplForgeBackend for PngBackend {
         } else if let Some(stripped) = data.strip_prefix(">9") {
             (stripped, Some("A"))
         } else {
-            (data, None)
+            (data, Some("B")) // Standard default is Code Set B
         };
 
         let hints = hint_val.map(|v| {
@@ -503,6 +537,7 @@ impl ZplForgeBackend for PngBackend {
             interpretation_line,
             interpretation_line_above,
             hints,
+            hint_val.unwrap_or(""),
         )
     }
 
@@ -537,52 +572,66 @@ impl ZplForgeBackend for PngBackend {
         );
         let hints: EncodeHints = hints.into();
 
-        let writer = MultiFormatWriter;
-        let bit_matrix = writer
-            .encode_with_hints(data, &BarcodeFormat::QR_CODE, 0, 0, &hints)
-            .map_err(|e| ZplError::BackendError(format!("QR Generation Error: {}", e)))?;
+        let bit_matrix = barcode_cache::encode_cached(
+            BarcodeFormat::QR_CODE,
+            data,
+            &format!("ec:{}", level),
+            Some(&hints),
+        )?;
 
         let mag = max(magnification, 1);
-        let bw = bit_matrix.getWidth();
-        let bh = bit_matrix.getHeight();
-        let full_width = bw * mag;
-        let full_height = bh * mag;
+        self.fill_matrix_cells(x, y, orientation, mag, mag, &bit_matrix, reverse_print);
+        Ok(())
+    }
 
-        let transform_rect = |lx: i32, ly: i32, w: u32, h: u32| -> Rect {
-            match orientation {
-                'N' => Rect::at(x as i32 + lx, y as i32 + ly).of_size(w, h),
-                'R' => {
-                    let new_x = full_height as i32 - (ly + h as i32);
-                    let new_y = lx;
-                    Rect::at(x as i32 + new_x, y as i32 + new_y).of_size(h, w)
-                }
-                'I' => {
-                    let new_x = full_width as i32 - (lx + w as i32);
-                    let new_y = full_height as i32 - (ly + h as i32);
-                    Rect::at(x as i32 + new_x, y as i32 + new_y).of_size(w, h)
-                }
-                'B' => {
-                    let new_x = ly;
-                    let new_y = full_width as i32 - (lx + w as i32);
-                    Rect::at(x as i32 + new_x, y as i32 + new_y).of_size(h, w)
-                }
-                _ => Rect::at(x as i32 + lx, y as i32 + ly).of_size(w, h),
-            }
-        };
+    fn draw_datamatrix(
+        &mut self,
+        x: u32,
+        y: u32,
+        orientation: char,
+        module_size: u32,
+        data: &str,
+        reverse_print: bool,
+    ) -> ZplResult<()> {
+        let bit_matrix = barcode_cache::encode_cached(BarcodeFormat::DATA_MATRIX, data, "", None)?;
 
-        for gy in 0..bh {
-            for gx in 0..bw {
-                if bit_matrix.get(gx, gy) {
-                    let rect = transform_rect((gx * mag) as i32, (gy * mag) as i32, mag, mag);
-                    if reverse_print {
-                        self.invert_rect(rect);
-                    } else {
-                        draw_filled_rect_mut(&mut self.canvas, rect, Rgb([0, 0, 0]));
-                    }
-                }
-            }
-        }
+        let m = max(module_size, 1);
+        self.fill_matrix_cells(x, y, orientation, m, m, &bit_matrix, reverse_print);
+        Ok(())
+    }
 
+    fn draw_pdf417(
+        &mut self,
+        x: u32,
+        y: u32,
+        orientation: char,
+        row_height: u32,
+        module_width: u32,
+        security_level: u32,
+        data: &str,
+        reverse_print: bool,
+    ) -> ZplResult<()> {
+        let mut hints = HashMap::new();
+        hints.insert(
+            EncodeHintType::ERROR_CORRECTION,
+            EncodeHintValue::ErrorCorrection(security_level.min(8).to_string()),
+        );
+        hints.insert(
+            EncodeHintType::MARGIN,
+            EncodeHintValue::Margin("0".to_owned()),
+        );
+        let hints: EncodeHints = hints.into();
+
+        let bit_matrix = barcode_cache::encode_cached(
+            BarcodeFormat::PDF_417,
+            data,
+            &format!("ec:{}", security_level.min(8)),
+            Some(&hints),
+        )?;
+
+        let cw = max(module_width, 1);
+        let ch = max(row_height, 1);
+        self.fill_matrix_cells(x, y, orientation, cw, ch, &bit_matrix, reverse_print);
         Ok(())
     }
 
@@ -611,7 +660,86 @@ impl ZplForgeBackend for PngBackend {
             interpretation_line,
             interpretation_line_above,
             None,
+            "",
         )
+    }
+
+    fn draw_barcode_1d(
+        &mut self,
+        kind: Barcode1DKind,
+        x: u32,
+        y: u32,
+        orientation: char,
+        height: u32,
+        module_width: u32,
+        interpretation_line: char,
+        interpretation_line_above: char,
+        data: &str,
+        reverse_print: bool,
+    ) -> ZplResult<()> {
+        self.draw_1d_barcode(
+            x,
+            y,
+            orientation,
+            height,
+            module_width,
+            data,
+            barcode_1d_format(kind),
+            reverse_print,
+            interpretation_line,
+            interpretation_line_above,
+            None,
+            "",
+        )
+    }
+
+    fn draw_graphic_diagonal(
+        &mut self,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+        thickness: u32,
+        color: char,
+        custom_color: Option<String>,
+        diagonal_orientation: char,
+        reverse_print: bool,
+    ) -> ZplResult<()> {
+        let draw_color = if custom_color.is_some() {
+            self.parse_hex_color(&custom_color)
+        } else if color == 'W' {
+            Rgb([255, 255, 255])
+        } else {
+            Rgb([0, 0, 0])
+        };
+
+        let w = max(width, 1) as i32;
+        let h = max(height, 1) as i32;
+        let t = (max(thickness, 1) as i32).min(w);
+
+        let draw_op = move |img: &mut RgbImage, px: i32, py: i32| {
+            // Filled parallelogram with horizontal thickness `t`.
+            let pts = if diagonal_orientation == 'L' {
+                // '\' top-left → bottom-right
+                [
+                    Point::new(px, py),
+                    Point::new(px + t, py),
+                    Point::new(px + w, py + h),
+                    Point::new(px + w - t, py + h),
+                ]
+            } else {
+                // '/' bottom-left → top-right
+                [
+                    Point::new(px, py + h),
+                    Point::new(px + t, py + h),
+                    Point::new(px + w, py),
+                    Point::new(px + w - t, py),
+                ]
+            };
+            draw_polygon_mut(img, &pts, draw_color);
+        };
+
+        self.draw_wrapper(x, y, w as u32, h as u32, reverse_print, draw_op)
     }
 
     fn finalize(&mut self) -> ZplResult<Vec<u8>> {
@@ -625,6 +753,58 @@ impl ZplForgeBackend for PngBackend {
 }
 
 impl PngBackend {
+    /// Paints every set cell of a 2-D bit matrix as a filled rectangle,
+    /// scaling each cell to `cell_w` × `cell_h` dots and applying the
+    /// requested orientation.
+    #[allow(clippy::too_many_arguments)]
+    fn fill_matrix_cells(
+        &mut self,
+        x: u32,
+        y: u32,
+        orientation: char,
+        cell_w: u32,
+        cell_h: u32,
+        bit_matrix: &BitMatrix,
+        reverse_print: bool,
+    ) {
+        let bw = bit_matrix.getWidth();
+        let bh = bit_matrix.getHeight();
+        let full_w = bw * cell_w;
+        let full_h = bh * cell_h;
+
+        for gy in 0..bh {
+            for gx in 0..bw {
+                if !bit_matrix.get(gx, gy) {
+                    continue;
+                }
+                let lx = (gx * cell_w) as i32;
+                let ly = (gy * cell_h) as i32;
+                let (w, h) = (cell_w, cell_h);
+                let rect = match orientation {
+                    'R' => {
+                        let nx = full_h as i32 - (ly + h as i32);
+                        Rect::at(x as i32 + nx, y as i32 + lx).of_size(h, w)
+                    }
+                    'I' => {
+                        let nx = full_w as i32 - (lx + w as i32);
+                        let ny = full_h as i32 - (ly + h as i32);
+                        Rect::at(x as i32 + nx, y as i32 + ny).of_size(w, h)
+                    }
+                    'B' => {
+                        let ny = full_w as i32 - (lx + w as i32);
+                        Rect::at(x as i32 + ly, y as i32 + ny).of_size(h, w)
+                    }
+                    _ => Rect::at(x as i32 + lx, y as i32 + ly).of_size(w, h),
+                };
+                if reverse_print {
+                    self.invert_rect(rect);
+                } else {
+                    draw_filled_rect_mut(&mut self.canvas, rect, Rgb([0, 0, 0]));
+                }
+            }
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn draw_1d_barcode(
         &mut self,
@@ -639,14 +819,9 @@ impl PngBackend {
         interpretation_line: char,
         interpretation_line_above: char,
         hints: Option<EncodeHints>,
+        hints_key: &str,
     ) -> ZplResult<()> {
-        let writer = MultiFormatWriter;
-        let bit_matrix = if let Some(h) = hints {
-            writer.encode_with_hints(data, &format, 0, 0, &h)
-        } else {
-            writer.encode(data, &format, 0, 0)
-        }
-        .map_err(|e| ZplError::BackendError(format!("Barcode Generation Error: {}", e)))?;
+        let bit_matrix = barcode_cache::encode_cached(format, data, hints_key, hints.as_ref())?;
 
         let mw = max(module_width, 1);
         let bh = height;
@@ -713,6 +888,7 @@ impl PngBackend {
                 font_char,
                 Some(text_h),
                 None,
+                'N',
                 data,
                 false,
                 None,

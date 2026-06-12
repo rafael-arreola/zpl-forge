@@ -1,9 +1,16 @@
+pub use crate::ast::commons::Barcode1DKind;
+
 /// Represents a self-contained ZPL instruction ready for rendering.
 ///
 /// Unlike AST commands, instructions are calculated based on the cumulative
 /// state of the parser (e.g., coordinates are absolute, fonts are resolved).
 #[derive(Debug)]
 pub enum ZplInstruction {
+    /// Starts a new page. Emitted between consecutive `^XA...^XZ` blocks.
+    ///
+    /// Backends that support multi-page output (PDF) start a fresh page;
+    /// single-surface backends (PNG) may ignore it.
+    PageBreak,
     /// Renders a text field.
     Text {
         /// Absolute X coordinate.
@@ -16,12 +23,16 @@ pub enum ZplInstruction {
         height: Option<u32>,
         /// Width in dots.
         width: Option<u32>,
+        /// Field orientation from `^A` (N, R, I, B).
+        orientation: char,
         /// Text content.
         text: String,
         /// Whether to print white-on-black.
         reverse_print: bool,
         /// Custom text color.
         color: Option<String>,
+        /// `^FB` block formatting (wrap, max lines, justification).
+        block: Option<TextBlock>,
         /// Condition for this instruction.
         condition: Option<(String, String)>,
     },
@@ -113,6 +124,60 @@ pub enum ZplInstruction {
         reverse_print: bool,
         condition: Option<(String, String)>,
     },
+    /// Draws a generic 1-D barcode (EAN-13, UPC-A, ITF, Code 93).
+    Barcode1D {
+        kind: Barcode1DKind,
+        x: u32,
+        y: u32,
+        orientation: char,
+        height: u32,
+        module_width: u32,
+        interpretation_line: char,
+        interpretation_line_above: char,
+        data: String,
+        reverse_print: bool,
+        condition: Option<(String, String)>,
+    },
+    /// Draws a diagonal line (`^GD`).
+    GraphicDiagonal {
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+        thickness: u32,
+        color: char,
+        custom_color: Option<String>,
+        /// Leaning: 'R' (`/`) or 'L' (`\`).
+        diagonal_orientation: char,
+        reverse_print: bool,
+        condition: Option<(String, String)>,
+    },
+    /// Draws a Data Matrix (ECC 200) barcode.
+    DataMatrix {
+        x: u32,
+        y: u32,
+        orientation: char,
+        /// Module size in dots (`^BX` dimensional height).
+        module_size: u32,
+        data: String,
+        reverse_print: bool,
+        condition: Option<(String, String)>,
+    },
+    /// Draws a PDF417 barcode.
+    Pdf417 {
+        x: u32,
+        y: u32,
+        orientation: char,
+        /// Row height in dots.
+        row_height: u32,
+        /// Module width in dots (from `^BY`).
+        module_width: u32,
+        /// Error correction security level (0-8).
+        security_level: u32,
+        data: String,
+        reverse_print: bool,
+        condition: Option<(String, String)>,
+    },
     /// Draws a Code 39 barcode.
     Code39 {
         x: u32,
@@ -127,6 +192,21 @@ pub enum ZplInstruction {
         reverse_print: bool,
         condition: Option<(String, String)>,
     },
+}
+
+/// `^FB` field-block formatting parameters.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextBlock {
+    /// Block width in dots; lines wrap to fit it.
+    pub width: u32,
+    /// Maximum number of lines (default 1).
+    pub max_lines: u32,
+    /// Extra space added between lines, in dots.
+    pub line_spacing: i32,
+    /// Justification: 'L', 'C', 'R' or 'J' (J renders as L).
+    pub justification: char,
+    /// Hanging indent applied from the second line onwards, in dots.
+    pub indent: u32,
 }
 
 /// Represents common printer resolutions.

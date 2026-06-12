@@ -1,4 +1,4 @@
-use super::commons::{Justification, YesNo};
+use super::commons::{Barcode1DKind, Justification, YesNo};
 
 /// Represents the supported ZPL commands in the AST.
 #[derive(Debug, Clone)]
@@ -254,6 +254,38 @@ pub enum Command {
         interpretation_line: Option<char>,
         /// Interpretation line above
         interpretation_line_above: Option<char>,
+    },
+
+    /// Generic 1-D barcode commands sharing the `o,h,f,g,e` parameter shape:
+    /// `^BE` (EAN-13), `^BU` (UPC-A), `^B2` (Interleaved 2 of 5), `^BA` (Code 93).
+    Barcode1D {
+        /// Which symbology this command selects.
+        kind: Barcode1DKind,
+        /// Orientation (N, R, I, B)
+        orientation: Option<char>,
+        /// Bar height in dots
+        height: Option<u32>,
+        /// Print interpretation line (Y/N)
+        interpretation_line: Option<char>,
+        /// Interpretation line above (Y/N)
+        interpretation_line_above: Option<char>,
+        /// Check digit (Y/N), where applicable
+        check_digit: Option<char>,
+    },
+
+    /// ^GD - Graphic Diagonal Line
+    /// Draws a diagonal line.
+    GraphicDiagonal {
+        /// Box width in dots
+        width: Option<u32>,
+        /// Box height in dots
+        height: Option<u32>,
+        /// Line thickness in dots
+        thickness: Option<u32>,
+        /// Line color (B/W)
+        line_color: Option<char>,
+        /// Leaning: 'R' (`/`) or 'L' (`\`)
+        diagonal_orientation: Option<char>,
     },
 
     /// ^BY - Barcode Field Default

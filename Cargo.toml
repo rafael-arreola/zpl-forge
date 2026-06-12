@@ -16,17 +16,32 @@ exclude = ["examples/*", "tests/*", "docs/*", ".github/*", "*.png", "*.pdf"]
 [dependencies]
 
 ab_glyph = "0.2.32"
-image = "0.25"
-imageproc = "0.26.1"
 nom = "8.0"
-base64 = "0.22.1"
-rxing = "0.8.5"
-tracing = "0.1"
-hex = "0.4.3"
 thiserror = "2.0"
-rayon = "1.12"
-lopdf = "0.40"
-flate2 = "1.1"
+
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"], optional = true }
+# default-features off: defaults re-enable image's full codec stack plus fft;
+# we only need the drawing primitives and `text` (draw_text_mut).
+imageproc = { version = "0.26.1", default-features = false, features = ["text", "rayon"], optional = true }
+base64 = { version = "0.22.1", optional = true }
+# default-features off: we only use the barcode *encoder* (MultiFormatWriter);
+# rxing's defaults pull the full image decode stack (avif/rav1e, exr, tiff...).
+# `encoding_rs` is mandatory for its CharacterSet support.
+rxing = { version = "0.8.5", default-features = false, features = ["encoding_rs"], optional = true }
+tracing = { version = "0.1", optional = true }
+# default-features off: defaults pull three date-time crates (chrono, jiff, time);
+# we only write PDFs and don't stamp creation dates.
+lopdf = { version = "0.40", default-features = false, optional = true }
+flate2 = { version = "1.1", optional = true }
+
+[features]
+default = ["png", "pdf"]
+# PNG raster backend (image + imageproc + barcode generation)
+png = ["dep:image", "dep:imageproc", "dep:rxing", "dep:base64"]
+# Native vector PDF backend (lopdf + flate2 + barcode generation)
+pdf = ["dep:lopdf", "dep:flate2", "dep:image", "dep:rxing", "dep:base64"]
+# Internal debug logging via the `tracing` crate
+tracing = ["dep:tracing"]
 
 [profile.release]
 lto = true

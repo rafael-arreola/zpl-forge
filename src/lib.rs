@@ -48,6 +48,8 @@
 //! - **Safe Calculations**: Saturating arithmetic is used for all coordinate and dimension calculations to prevent integer overflows.
 //! - **Unit Normalization**: Input values for physical dimensions are validated to prevent negative sizes.
 
+#![forbid(unsafe_code)]
+
 mod ast;
 mod engine;
 pub mod error;
@@ -57,4 +59,5 @@ pub mod tools;
 pub use engine::*;
 pub use error::{ZplError, ZplResult};
 
+#[cfg(feature = "tracing")]
 pub(crate) const TARGET: &str = "zpl-forge";

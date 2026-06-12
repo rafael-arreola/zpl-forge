@@ -1,3 +1,5 @@
+//! Error handling types and result definitions for ZPL parsing and rendering.
+
 use thiserror::Error;
 
 /// Errors that can occur during ZPL parsing and rendering.
