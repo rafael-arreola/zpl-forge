@@ -135,6 +135,68 @@ impl ZplEngine {
         mut backend: B,
         variables: &HashMap<String, String>,
     ) -> ZplResult<Vec<u8>> {
+        let w_dots = self.width.clone().to_dots(self.resolution);
+        let h_dots = self.height.clone().to_dots(self.resolution);
+        let font_manager = if let Some(fonts) = &self.fonts {
+            fonts.clone()
+        } else {
+            Arc::new(FontManager::default())
+        };
+
+        backend.setup_page(w_dots as f64, h_dots as f64, self.resolution.dpi());
+        backend.setup_font_manager(&font_manager);
+
+        self.render_instructions(&mut backend, variables, &font_manager)?;
+
+        let result = backend.finalize()?;
+
+        Ok(result)
+    }
+
+    /// Renders the same parsed template multiple times into a single multi-page document,
+    /// using a different set of variables for each page.
+    ///
+    /// # Arguments
+    /// * `backend` - An implementation of `ZplForgeBackend` that supports multi-page (e.g., `PdfNativeBackend`).
+    /// * `pages_variables` - A slice of maps, where each map corresponds to a single page's variable assignments.
+    ///
+    /// # Errors
+    /// Returns an error if rendering fails at the backend level.
+    pub fn render_pages<B: backend::ZplForgeBackend>(
+        &self,
+        mut backend: B,
+        pages_variables: &[HashMap<String, String>],
+    ) -> ZplResult<Vec<u8>> {
+        let w_dots = self.width.clone().to_dots(self.resolution);
+        let h_dots = self.height.clone().to_dots(self.resolution);
+        let font_manager = if let Some(fonts) = &self.fonts {
+            fonts.clone()
+        } else {
+            Arc::new(FontManager::default())
+        };
+
+        backend.setup_page(w_dots as f64, h_dots as f64, self.resolution.dpi());
+        backend.setup_font_manager(&font_manager);
+
+        for (page_idx, variables) in pages_variables.iter().enumerate() {
+            if page_idx > 0 {
+                backend.new_page()?;
+            }
+            self.render_instructions(&mut backend, variables, &font_manager)?;
+        }
+
+        let result = backend.finalize()?;
+
+        Ok(result)
+    }
+
+    /// Helper method to execute the parsed instructions on the provided backend.
+    fn render_instructions<B: backend::ZplForgeBackend>(
+        &self,
+        backend: &mut B,
+        variables: &HashMap<String, String>,
+        font_manager: &FontManager,
+    ) -> ZplResult<()> {
         fn replace_vars<'a>(
             s: &'a str,
             variables: &HashMap<String, String>,
@@ -175,17 +237,6 @@ impl ZplEngine {
                 std::borrow::Cow::Borrowed(s)
             }
         }
-
-        let w_dots = self.width.clone().to_dots(self.resolution);
-        let h_dots = self.height.clone().to_dots(self.resolution);
-        let font_manager = if let Some(fonts) = &self.fonts {
-            fonts.clone()
-        } else {
-            Arc::new(FontManager::default())
-        };
-
-        backend.setup_page(w_dots as f64, h_dots as f64, self.resolution.dpi());
-        backend.setup_font_manager(&font_manager);
 
         for instruction in &self.instructions {
             if let common::ZplInstruction::PageBreak = instruction {
@@ -251,7 +302,7 @@ impl ZplEngine {
                     // ^FB: wrap into lines, justify, and place each line
                     // according to the field orientation.
                     let measure =
-                        |s: &str| measure_text_dots(&font_manager, *font, *height, *width, s);
+                        |s: &str| measure_text_dots(font_manager, *font, *height, *width, s);
                     let lines = wrap_text_block(&resolved, b.width, measure);
                     let n_lines = lines.len().min(b.max_lines.max(1) as usize);
 
@@ -555,8 +606,6 @@ impl ZplEngine {
             }
         }
 
-        let result = backend.finalize()?;
-
-        Ok(result)
+        Ok(())
     }
 }

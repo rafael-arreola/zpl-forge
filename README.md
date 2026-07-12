@@ -204,6 +204,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+#### Template-Based Multi-Page PDF Generation (`render_pages`)
+
+If you have a single template with placeholders and want to render multiple pages with different sets of variables efficiently, you can use the `render_pages` method. This parses and builds the AST exactly once and renders multiple pages using a list of variable maps, which is significantly faster and uses less memory than concatenating raw ZPL.
+
+```rust
+use std::collections::HashMap;
+use zpl_forge::{ZplEngine, Unit, Resolution};
+use zpl_forge::forge::pdf_native::PdfNativeBackend;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Define a template with variable placeholders
+    let zpl_template = "^XA^FO50,50^A0N,40,40^FDPage {{PAGE}} of {{TOTAL}}^FS^XZ";
+
+    let engine = ZplEngine::new(
+        zpl_template,
+        Unit::Inches(4.0),
+        Unit::Inches(3.0),
+        Resolution::Dpi203,
+    )?;
+
+    // Create a vector of variable mappings for each page
+    let mut pages_variables = Vec::new();
+    for i in 1..=3 {
+        let mut vars = HashMap::new();
+        vars.insert("PAGE".to_string(), i.to_string());
+        vars.insert("TOTAL".to_string(), "3".to_string());
+        pages_variables.push(vars);
+    }
+
+    // Render all pages in one hyper-efficient pass
+    let backend = PdfNativeBackend::new().with_title("Template PDF Generation");
+    let pdf_bytes = engine.render_pages(backend, &pages_variables)?;
+    std::fs::write("batch_templated.pdf", pdf_bytes)?;
+    Ok(())
+}
+```
+
 ### Custom Fonts
 
 ZPL-Forge ships with embedded high-quality open-source fonts mapped to ZPL identifiers so it works out of the box with zero system dependencies:
