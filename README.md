@@ -21,7 +21,7 @@ Check out the [**Visual Documentation (EXAMPLES.md)**](https://github.com/rafael
 
 ZPL-Forge is engineered to deliver enterprise-grade performance and ultra-low latency, making it perfect for both instant single-label previews and high-throughput bulk generation.
 
-**Single Label Render Times (Measured in release mode using the embedded 64 KB Iosevka Term Slab font):**
+**Single Label Render Times (Measured in release mode using the embedded 130 KB TeX Gyre Heros Cn font):**
 
 - **Routing/Dispatch Label (`test_02`):**
   - PNG Output (`PngBackend`): **0.62 ms**
@@ -206,7 +206,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Custom Fonts
 
-ZPL-Forge ships with an embedded open-source font (Iosevka Term Slab) mapped to every ZPL identifier, so it works out of the box with zero system dependencies. To use your own typography, register TrueType (`.ttf`) or OpenType (`.otf`) bytes on a `FontManager` and attach it to the engine. Each font is bound to a range of ZPL identifiers (`A`–`Z`, `0`–`9`) and selected from ZPL with `^A` or `^CF`.
+ZPL-Forge ships with embedded high-quality open-source fonts mapped to ZPL identifiers so it works out of the box with zero system dependencies:
+
+| Font                  | ZPL identifiers | Role                                                      | License           |
+| :-------------------- | :-------------- | :-------------------------------------------------------- | :---------------- |
+| **TeX Gyre Heros Cn** | `0`–`9`         | Scalable sans (`^A0`, `^CF0`) — Helvetica-style condensed | GUST Font License |
+| **Iosevka Term Slab** | `A`–`Z`         | Monospace / bitmap-font emulation                         | SIL OFL 1.1       |
+| **OCR-B**             | `E`             | Machine-readable standard (Zebra `E`)                     | Free (Schwarz)    |
+| **OCR-A**             | `H`             | Industrial OCR standard (Zebra `H`)                       | BSD-3-Clause      |
+
+All embedded fonts are free to use, modify, and redistribute; their full license texts and copyright notices ship with the crate in [`src/assets/`](src/assets/).
+
+To use your own typography, register TrueType (`.ttf`) or OpenType (`.otf`) bytes on a `FontManager` and attach it to the engine. Each font is bound to a range of ZPL identifiers (`A`–`Z`, `0`–`9`) and selected from ZPL with `^A` or `^CF`.
 
 ```rust
 use std::collections::HashMap;
@@ -254,7 +265,7 @@ fonts.register_font("Roboto Bold", &bold_bytes, 'B', 'B')?;     // ^ABN,40,40
 Two ways to condense or expand text:
 
 1. **The `w` parameter of `^A`** — glyphs are scaled horizontally by the `w/h` ratio, exactly like a Zebra printer. `^A0N,60,40` renders 60-dot-tall glyphs compressed to ⅔ of their natural width; `^A0N,60,90` expands them 1.5×. Omitting `w` keeps the font's natural proportions.
-2. **Register a naturally condensed family** (e.g., Roboto Condensed, Archivo Narrow) when you want true condensed letterforms instead of a geometric squeeze.
+2. **Register a naturally condensed family** (e.g., Saira Condensed, Archivo Narrow) when you want true condensed letterforms instead of a geometric squeeze.
 
 #### Identifier semantics: bitmap vs scalable
 
@@ -317,3 +328,12 @@ Dual-licensed under either:
 - Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
 
 At your option.
+
+### Embedded font licenses
+
+The fonts embedded in the binary keep their own permissive licenses, all of which allow free use, modification, and redistribution (including commercial). Full texts and copyright notices are shipped in [`src/assets/`](src/assets/):
+
+- **TeX Gyre Heros Cn** — GUST Font License, GUST e-foundry / URW++ ([`TEX_GYRE_HEROS_LICENSE.txt`](src/assets/TEX_GYRE_HEROS_LICENSE.txt))
+- **Iosevka Term Slab** — SIL Open Font License 1.1 ([`IOSEVKA_LICENSE.txt`](src/assets/IOSEVKA_LICENSE.txt), [`OFL.txt`](src/assets/OFL.txt))
+- **OCR-A** — BSD-3-Clause, SFO Museum ([`OCRA_LICENSE.txt`](src/assets/OCRA_LICENSE.txt))
+- **OCR-B** — freely distributable without limitation, N. Schwarz / Z. Wagner ([`OCRB_LICENSE.txt`](src/assets/OCRB_LICENSE.txt))

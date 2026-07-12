@@ -5,7 +5,21 @@ use ab_glyph::{Font, FontArc, PxScale, ScaleFont};
 
 /// Default fallback font bytes embedded in the binary.
 /// This guarantees the library runs on any OS/Platform without C dependencies.
-const DEFAULT_FONT_BYTES: &[u8] = include_bytes!("../assets/IosevkaTermSlab-Regular.ttf");
+const MONO_FONT_BYTES: &[u8] = include_bytes!("../assets/IosevkaTermSlab-Regular.ttf");
+
+/// High-fidelity default scalable sans font embedded in the binary
+/// (TeX Gyre Heros Condensed, a free Helvetica-metric clone derived from
+/// URW Nimbus Sans). Used for font identifiers '0'-'9' and standard
+/// scalable text fields.
+const SANS_FONT_BYTES: &[u8] = include_bytes!("../assets/TeXGyreHerosCn-Bold.otf");
+
+/// Default OCR-A font bytes embedded in the binary.
+/// Used for font identifier 'H'.
+const OCR_A_FONT_BYTES: &[u8] = include_bytes!("../assets/OCRA.ttf");
+
+/// Default OCR-B font bytes embedded in the binary (Schwarz/Wagner free
+/// digitization, distributed without limitation). Used for font identifier 'E'.
+const OCR_B_FONT_BYTES: &[u8] = include_bytes!("../assets/OCRB.otf");
 
 /// List of valid ZPL font identifiers (A-Z and 0-9).
 const FONT_MAP: &[char] = &[
@@ -143,11 +157,13 @@ pub struct FontManager {
 }
 
 impl Default for FontManager {
-    /// Creates a `FontManager` with a lightweight open-source default font
-    /// registered for all identifiers ('A' to '9').
+    /// Creates a `FontManager` with high-fidelity, lightweight open-source fonts
+    /// registered for their respective identifiers.
     ///
-    /// Uses Iosevka Term Slab (SIL Open Font License, Version 1.1)
-    /// embedded directly in the binary, ensuring zero native dependencies on the host OS.
+    /// - TeX Gyre Heros Cn (GUST Font License) is registered for scalable/sans identifiers ('0' to '9').
+    /// - Iosevka Term Slab (SIL Open Font License) is registered for monospace/slab identifiers ('A' to 'Z').
+    /// - OCR-A is registered for OCR-A identifier ('H').
+    /// - OCR-B is registered for OCR-B identifier ('E').
     fn default() -> Self {
         let mut current = Self {
             font_map: HashMap::new(),
@@ -156,8 +172,11 @@ impl Default for FontManager {
             font_metrics: HashMap::new(),
         };
 
-        // Register the embedded font for all alphanumeric ZPL identifiers
-        let _ = current.register_font("Iosevka Term Slab", DEFAULT_FONT_BYTES, 'A', '9');
+        // Register default fonts for their respective alphanumeric ZPL identifiers
+        let _ = current.register_font("Iosevka Term Slab", MONO_FONT_BYTES, 'A', 'Z');
+        let _ = current.register_font("TeX Gyre Heros Cn", SANS_FONT_BYTES, '0', '9');
+        let _ = current.register_font("OCR-A", OCR_A_FONT_BYTES, 'H', 'H');
+        let _ = current.register_font("OCR-B", OCR_B_FONT_BYTES, 'E', 'E');
 
         current
     }
