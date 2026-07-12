@@ -218,25 +218,51 @@ impl ZplForgeBackend for PngBackend {
 
         // Rotated text: render on a temporary transparent surface, rotate it, and blit
         // non-transparent pixels so the background stays transparent.
+        //
+        // Ink can overflow the character cell on both sides: ascenders and
+        // accents rise above the cap line (`y_offset` is negative because the
+        // font ascent exceeds the cap height) and descenders can drop below
+        // `cell_h`. Pad the surface so nothing is clipped, then shift the blit
+        // anchor so the cell's top-left corner still lands exactly on (x, y).
         let text_w = self.get_text_width(text, font, height, width).max(1);
         let font_h = (layout.cell_h.ceil() as u32).max(1);
-        let mut tmp = RgbaImage::from_pixel(text_w, font_h, Rgba([0, 0, 0, 0]));
+        let top_pad = (-y_offset).max(0) as u32;
+        // `descent()` is negative: ink below the baseline reaches `baseline - descent`.
+        let descent = font_data.as_scaled(scale).descent();
+        let ink_bottom = (layout.baseline - descent).ceil() as i32;
+        let bottom_pad = (ink_bottom - font_h as i32).max(0) as u32;
+        let mut tmp =
+            RgbaImage::from_pixel(text_w, font_h + top_pad + bottom_pad, Rgba([0, 0, 0, 0]));
         let text_rgba = Rgba([text_color.0[0], text_color.0[1], text_color.0[2], 255]);
-        draw_text_mut(&mut tmp, text_rgba, 0, y_offset, scale, &font_data, text);
+        draw_text_mut(
+            &mut tmp,
+            text_rgba,
+            0,
+            y_offset + top_pad as i32,
+            scale,
+            &font_data,
+            text,
+        );
 
-        let rotated = match orientation {
-            'R' => rotate90(&tmp),
-            'I' => rotate180(&tmp),
-            _ => rotate270(&tmp),
+        // Rotation moves each pad to a different edge; only pads landing on
+        // the low-index side displace the cell content and must be subtracted
+        // from the anchor.
+        let (rotated, pad_x, pad_y) = match orientation {
+            // 90° cw: top pad → right edge, bottom pad → left edge.
+            'R' => (rotate90(&tmp), bottom_pad, 0),
+            // 180°: top pad → bottom edge, bottom pad → top edge.
+            'I' => (rotate180(&tmp), 0, bottom_pad),
+            // 270° cw: top pad → left edge, bottom pad → right edge.
+            _ => (rotate270(&tmp), top_pad, 0),
         };
 
         let (cw, ch) = self.canvas.dimensions();
         for (sx, sy, p) in rotated.enumerate_pixels() {
             if p.0[3] > 0 {
-                let dx = x.saturating_add(sx);
-                let dy = y.saturating_add(sy);
-                if dx < cw && dy < ch {
-                    self.canvas[(dx, dy)] = Rgb([p.0[0], p.0[1], p.0[2]]);
+                let dx = x as i64 + sx as i64 - pad_x as i64;
+                let dy = y as i64 + sy as i64 - pad_y as i64;
+                if (0..cw as i64).contains(&dx) && (0..ch as i64).contains(&dy) {
+                    self.canvas[(dx as u32, dy as u32)] = Rgb([p.0[0], p.0[1], p.0[2]]);
                 }
             }
         }
