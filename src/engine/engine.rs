@@ -167,6 +167,10 @@ impl ZplEngine {
         mut backend: B,
         pages_variables: &[HashMap<String, String>],
     ) -> ZplResult<Vec<u8>> {
+        if pages_variables.is_empty() {
+            return Ok(Vec::new());
+        }
+
         let w_dots = self.width.clone().to_dots(self.resolution);
         let h_dots = self.height.clone().to_dots(self.resolution);
         let font_manager = if let Some(fonts) = &self.fonts {
