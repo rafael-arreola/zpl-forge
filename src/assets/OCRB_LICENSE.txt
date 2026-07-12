@@ -1,0 +1,11 @@
+OCR-B outline font (OCRB.otf)
+
+Origin: CTAN package "ocr-b-outline" (https://ctan.org/pkg/ocr-b-outline)
+Outline conversion: Zdenek Wagner, http://icebearsoft.euweb.cz (2010-2011)
+Original METAFONT sources: Norbert Schwarz, Ruhr-Universitaet Bochum
+
+License terms, as stated by the authors in the package README:
+
+  "The license of the outline fonts is the same as for the original fonts,
+   i.e. you may freely use, modify, and/or distribute any of these files,
+   without limitation."

@@ -1,4 +1,6 @@
-Copyright 2020 The Open Sans Project Authors (https://github.com/googlefonts/opensans)
+This is the full text of the SIL Open Font License, Version 1.1.
+Per-font copyright notices are provided in the accompanying
+*_LICENSE.txt files (Iosevka Term Slab).
 
 -----------------------------------------------------------
 SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007

@@ -537,15 +537,6 @@ pub fn render_ifc_conditional() {
     );
 }
 
-/// Helper function to perform lightweight template variable substitution before rendering.
-fn substitute_zpl_template(template: &str, vars: &HashMap<&str, &str>) -> String {
-    let mut page_zpl = template.to_string();
-    for (key, val) in vars {
-        page_zpl = page_zpl.replace(&format!("{{{{{}}}}}", key), val);
-    }
-    page_zpl
-}
-
 pub fn render_multi_page_pdf() {
     const BENCHMARK_PAGE_COUNT: usize = 1000;
     const PAGE_WIDTH_INCHES: f32 = 4.0;
@@ -879,42 +870,41 @@ pub fn render_multi_page_pdf() {
     let resolution = Resolution::Dpi203;
 
     println!(
-        "[multi_page_labels.pdf] Preparing ZPL data for {} pages...",
+        "[multi_page_labels.pdf] Preparing variables for {} pages...",
         BENCHMARK_PAGE_COUNT
     );
     let prepare_start = Instant::now();
-    let mut large_zpl = String::with_capacity(zpl_template.len() * BENCHMARK_PAGE_COUNT);
+    let mut pages_vars = Vec::with_capacity(BENCHMARK_PAGE_COUNT);
 
     for i in 0..BENCHMARK_PAGE_COUNT {
         let mut vars = HashMap::new();
         let order_id = format!("ORD-{}", 1001 + i);
-        let name = names[i % names.len()];
-        let address = addresses[i % addresses.len()];
-        let city = cities[i % cities.len()];
+        let name = names[i % names.len()].to_string();
+        let address = addresses[i % addresses.len()].to_string();
+        let city = cities[i % cities.len()].to_string();
         let page_num = format!("{}", i + 1);
         let total_num = format!("{}", BENCHMARK_PAGE_COUNT);
 
-        vars.insert("order_id", order_id.as_str());
-        vars.insert("name", name);
-        vars.insert("address", address);
-        vars.insert("city", city);
-        vars.insert("page", page_num.as_str());
-        vars.insert("total", total_num.as_str());
+        vars.insert("order_id".to_string(), order_id);
+        vars.insert("name".to_string(), name);
+        vars.insert("address".to_string(), address);
+        vars.insert("city".to_string(), city);
+        vars.insert("page".to_string(), page_num);
+        vars.insert("total".to_string(), total_num);
 
-        let page_zpl = substitute_zpl_template(zpl_template, &vars);
-        large_zpl.push_str(&page_zpl);
+        pages_vars.push(vars);
     }
     println!(
-        "[multi_page_labels.pdf] ZPL generation completed in {:.2?}",
+        "[multi_page_labels.pdf] Variable preparation completed in {:.2?}",
         prepare_start.elapsed()
     );
 
-    println!("[multi_page_labels.pdf] Parsing and rendering multi-page PDF natively...");
+    println!("[multi_page_labels.pdf] Parsing template and rendering multi-page PDF natively...");
     let render_start = Instant::now();
-    let engine = ZplEngine::new(&large_zpl, width, height, resolution)
-        .expect("Failed to parse concatenated ZPL data");
+    let engine = ZplEngine::new(zpl_template, width, height, resolution)
+        .expect("Failed to parse ZPL template");
     let pdf_bytes = engine
-        .render(PdfNativeBackend::new(), &HashMap::new())
+        .render_pages(PdfNativeBackend::new(), &pages_vars)
         .expect("Failed to render native PDF pages");
     let render_duration = render_start.elapsed();
 

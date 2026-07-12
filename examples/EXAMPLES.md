@@ -1,12 +1,12 @@
 # ZPL-Forge Examples & Capability Showcase
 
-This document provides ready-to-run examples, a detailed feature showcase, and up-to-date performance benchmarks for `zpl-forge` utilizing the newly optimized **64 KB `Iosevka Term Slab` embedded default font**.
+This document provides ready-to-run examples, a detailed feature showcase, and up-to-date performance benchmarks for `zpl-forge` utilizing the embedded default font set (**TeX Gyre Heros Cn** for scalable text, **Iosevka Term Slab** for monospace/bitmap emulation, plus **OCR-A** and **OCR-B** for identifiers `H` and `E`).
 
 ---
 
 ## 🌐 Multi-Language & Unicode Coverage
 
-To maintain an extremely compact compiled binary size and sub-millisecond loading performance, the embedded default font is subsetted to the standard **ASCII + Latin-1 Supplement** Unicode range (`U+0020-00FF`).
+To maintain an extremely compact compiled binary size and sub-millisecond loading performance, the embedded monospace font (Iosevka Term Slab) is subsetted to the standard **ASCII + Latin-1 Supplement** Unicode range (`U+0020-00FF`).
 
 This provides 100% full, compliant typographic support for:
 
@@ -85,7 +85,7 @@ Since `zpl-forge` compiles these vector assets natively, you can inspect the out
 
 ### 1. Simple Quick Start (PNG & PDF)
 
-This shows how to compile a simple ZPL label and output it to both formats using the default embedded 64 KB `Iosevka Term Slab` font.
+This shows how to compile a simple ZPL label and output it to both formats using the default embedded fonts (no system dependencies required).
 
 ```rust
 use std::collections::HashMap;

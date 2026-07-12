@@ -21,18 +21,18 @@ Check out the [**Visual Documentation (EXAMPLES.md)**](https://github.com/rafael
 
 ZPL-Forge is engineered to deliver enterprise-grade performance and ultra-low latency, making it perfect for both instant single-label previews and high-throughput bulk generation.
 
-**Single Label Render Times (Measured in release mode using the embedded 64 KB Iosevka Term Slab font):**
+**Single Label Render Times (Measured in release mode using the embedded 130 KB TeX Gyre Heros Cn font):**
 
 - **Routing/Dispatch Label (`test_02`):**
-  - PNG Output (`PngBackend`): **0.63 ms**
-  - Native PDF Output (`PdfNativeBackend`): **2.50 ms**
+  - PNG Output (`PngBackend`): **0.62 ms**
+  - Native PDF Output (`PdfNativeBackend`): **2.06 ms**
 - **Standard Shipping Label (`test_01`):**
-  - PNG Output (`PngBackend`): **15.62 ms**
-  - Native PDF Output (`PdfNativeBackend`): **2.58 ms**
+  - PNG Output (`PngBackend`): **4.96 ms**
+  - Native PDF Output (`PdfNativeBackend`): **2.33 ms**
 
 **Massive Bulk Batching (Measured in release mode):**
 
-- **Native Vector PDF (1,000 Combined Labels):** **97.24 ms** total time (**0.1 ms / page**), producing a compact, searchable file of only **0.82 MB** (a throughput of over **10,000 pages per second**!).
+- **Native Vector PDF (1,000 Combined Labels):** **75 ms** total time (**0.1 ms / page**), producing a compact, searchable file of only **0.82 MB** (a throughput of over **13,000 pages per second**!).
 
 ## Installation
 
@@ -67,7 +67,9 @@ The library provides two backends for different needs.
 Best for web previews or raster printing. Gated under the `png` cargo feature.
 
 ```rust
-use zpl_forge::{ZplEngine, PngBackend};
+use std::collections::HashMap;
+use zpl_forge::{Resolution, Unit, ZplEngine};
+use zpl_forge::forge::png::PngBackend;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let zpl = "^XA^FO50,50^A0N,50,50^FDHello World^FS^XZ";
@@ -97,7 +99,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 Outputs selectable text and native vector graphics. Ultra-fast, extremely small file size, and requires zero rasterization. Gated under the `pdf` cargo feature.
 
 ```rust
-use zpl_forge::{ZplEngine, PdfNativeBackend};
+use std::collections::HashMap;
+use zpl_forge::{Resolution, Unit, ZplEngine};
+use zpl_forge::forge::pdf_native::PdfNativeBackend;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let zpl = "^XA^FO50,50^A0N,50,50^FDSelectable Text!^FS^XZ";
@@ -129,7 +133,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 Inject dynamic data into your ZPL without extra allocations. Simply use the `{{variable_name}}` syntax in your ZPL code and pass a variables map to `.render()`.
 
 ```rust
-use zpl_forge::{ZplEngine, PdfBackend};
+use std::collections::HashMap;
+use zpl_forge::{Resolution, Unit, ZplEngine};
+use zpl_forge::forge::png::PngBackend;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let zpl = "^XA^FO50,50^A0N,50,50^FDHello {{NAME}}^FS^XZ";
@@ -198,6 +204,112 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+#### Template-Based Multi-Page PDF Generation (`render_pages`)
+
+If you have a single template with placeholders and want to render multiple pages with different sets of variables efficiently, you can use the `render_pages` method. This parses and builds the AST exactly once and renders multiple pages using a list of variable maps, which is significantly faster and uses less memory than concatenating raw ZPL.
+
+```rust
+use std::collections::HashMap;
+use zpl_forge::{ZplEngine, Unit, Resolution};
+use zpl_forge::forge::pdf_native::PdfNativeBackend;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Define a template with variable placeholders
+    let zpl_template = "^XA^FO50,50^A0N,40,40^FDPage {{PAGE}} of {{TOTAL}}^FS^XZ";
+
+    let engine = ZplEngine::new(
+        zpl_template,
+        Unit::Inches(4.0),
+        Unit::Inches(3.0),
+        Resolution::Dpi203,
+    )?;
+
+    // Create a vector of variable mappings for each page
+    let mut pages_variables = Vec::new();
+    for i in 1..=3 {
+        let mut vars = HashMap::new();
+        vars.insert("PAGE".to_string(), i.to_string());
+        vars.insert("TOTAL".to_string(), "3".to_string());
+        pages_variables.push(vars);
+    }
+
+    // Render all pages in one hyper-efficient pass
+    let backend = PdfNativeBackend::new().with_title("Template PDF Generation");
+    let pdf_bytes = engine.render_pages(backend, &pages_variables)?;
+    std::fs::write("batch_templated.pdf", pdf_bytes)?;
+    Ok(())
+}
+```
+
+### Custom Fonts
+
+ZPL-Forge ships with embedded high-quality open-source fonts mapped to ZPL identifiers so it works out of the box with zero system dependencies:
+
+| Font                  | ZPL identifiers | Role                                                      | License           |
+| :-------------------- | :-------------- | :-------------------------------------------------------- | :---------------- |
+| **TeX Gyre Heros Cn** | `0`–`9`         | Scalable sans (`^A0`, `^CF0`) — Helvetica-style condensed | GUST Font License |
+| **Iosevka Term Slab** | `A`–`Z`         | Monospace / bitmap-font emulation                         | SIL OFL 1.1       |
+| **OCR-B**             | `E`             | Machine-readable standard (Zebra `E`)                     | Free (Schwarz)    |
+| **OCR-A**             | `H`             | Industrial OCR standard (Zebra `H`)                       | BSD-3-Clause      |
+
+All embedded fonts are free to use, modify, and redistribute; their full license texts and copyright notices ship with the crate in [`src/assets/`](src/assets/).
+
+To use your own typography, register TrueType (`.ttf`) or OpenType (`.otf`) bytes on a `FontManager` and attach it to the engine. Each font is bound to a range of ZPL identifiers (`A`–`Z`, `0`–`9`) and selected from ZPL with `^A` or `^CF`.
+
+```rust
+use std::collections::HashMap;
+use std::sync::Arc;
+use zpl_forge::{FontManager, Resolution, Unit, ZplEngine};
+use zpl_forge::forge::png::PngBackend;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut fonts = FontManager::default();
+
+    // From a bundled asset (compiled into your binary):
+    // fonts.register_font("Roboto", include_bytes!("../assets/Roboto-Regular.ttf"), '0', '0')?;
+
+    // From any file on disk, including OS font directories
+    // (macOS: /System/Library/Fonts, Linux: /usr/share/fonts, Windows: C:\Windows\Fonts):
+    let bytes = std::fs::read("/usr/share/fonts/truetype/roboto/Roboto-Regular.ttf")?;
+    fonts.register_font("Roboto", &bytes, 'T', 'T')?; // available as ^AT / ^CFT
+
+    let zpl = "^XA^FO50,50^ATN,50,50^FDRendered with Roboto^FS^XZ";
+    let mut engine = ZplEngine::new(zpl, Unit::Inches(4.0), Unit::Inches(2.0), Resolution::Dpi203)?;
+    engine.set_fonts(Arc::new(fonts));
+
+    let png = engine.render(PngBackend::new(), &HashMap::new())?;
+    std::fs::write("custom_font.png", png)?;
+    Ok(())
+}
+```
+
+See [`examples/custom_fonts.rs`](examples/custom_fonts.rs) for a runnable demo that registers ten different families at once.
+
+#### Weights and styles (Light / Regular / Bold)
+
+ZPL-Forge does not synthesize weights or slants — the glyphs come straight from the font file. To offer multiple weights, register one **static instance per weight** under its own identifier and pick it from ZPL:
+
+```rust
+fonts.register_font("Roboto Light", &light_bytes, 'L', 'L')?;   // ^ALN,40,40
+fonts.register_font("Roboto Regular", &regular_bytes, 'R', 'R')?; // ^ARN,40,40
+fonts.register_font("Roboto Bold", &bold_bytes, 'B', 'B')?;     // ^ABN,40,40
+```
+
+> **Variable fonts:** axes (`wght`, `wdth`, `MONO`, …) are not supported — a variable TTF renders at its default instance only. Export static instances first, e.g. with fonttools: `fonttools varLib.instancer Font-VF.ttf wght=700 -o Font-Bold.ttf`.
+
+#### Condensation (horizontal scale)
+
+Two ways to condense or expand text:
+
+1. **The `w` parameter of `^A`** — glyphs are scaled horizontally by the `w/h` ratio, exactly like a Zebra printer. `^A0N,60,40` renders 60-dot-tall glyphs compressed to ⅔ of their natural width; `^A0N,60,90` expands them 1.5×. Omitting `w` keeps the font's natural proportions.
+2. **Register a naturally condensed family** (e.g., Saira Condensed, Archivo Narrow) when you want true condensed letterforms instead of a geometric squeeze.
+
+#### Identifier semantics: bitmap vs scalable
+
+To match real printer output, identifiers **`A`–`H`** emulate Zebra's built-in **bitmap fonts**: heights snap to integer magnifications of the original dot-matrix cell (font A is 9×5 dots) and the glyphs are stretched to the fixed cell aspect — this is what makes `^CFA,30` look exactly like Labelary/hardware. Identifiers **`0`–`9`** and **`I`–`Z`** use the **scalable** model (any height, natural glyph proportions, capital letters spanning ~75% of the `^A` height).
+
+> Register decorative or brand fonts on scalable identifiers (`0`–`9`, `I`–`Z`). A custom font placed on `A`–`H` inherits the bitmap cell geometry and will look artificially stretched.
+
 ## Supported ZPL Commands
 
 | Command | Name             | Parameters    | Description                                                                                                 |
@@ -253,3 +365,12 @@ Dual-licensed under either:
 - Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
 
 At your option.
+
+### Embedded font licenses
+
+The fonts embedded in the binary keep their own permissive licenses, all of which allow free use, modification, and redistribution (including commercial). Full texts and copyright notices are shipped in [`src/assets/`](src/assets/):
+
+- **TeX Gyre Heros Cn** — GUST Font License, GUST e-foundry / URW++ ([`TEX_GYRE_HEROS_LICENSE.txt`](src/assets/TEX_GYRE_HEROS_LICENSE.txt))
+- **Iosevka Term Slab** — SIL Open Font License 1.1 ([`IOSEVKA_LICENSE.txt`](src/assets/IOSEVKA_LICENSE.txt), [`OFL.txt`](src/assets/OFL.txt))
+- **OCR-A** — BSD-3-Clause, SFO Museum ([`OCRA_LICENSE.txt`](src/assets/OCRA_LICENSE.txt))
+- **OCR-B** — freely distributable without limitation, N. Schwarz / Z. Wagner ([`OCRB_LICENSE.txt`](src/assets/OCRB_LICENSE.txt))

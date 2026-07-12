@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::sync::Arc;
 
-use ab_glyph::{Font, FontArc, PxScale, ScaleFont};
+use ab_glyph::{Font, FontArc};
 use base64::{Engine as _, engine::general_purpose};
 use flate2::Compression;
 use flate2::write::ZlibEncoder;
@@ -461,17 +461,7 @@ impl PdfNativeBackend {
         self.emit_op("h");
     }
 
-    // ── font / text helpers ────────────────────────────────────────
-
-    fn get_font_arc(&self, font_char: char) -> ZplResult<&ab_glyph::FontArc> {
-        let fm = self
-            .font_manager
-            .as_ref()
-            .ok_or_else(|| ZplError::FontError("Font manager not initialized".into()))?;
-        fm.get_font(&font_char.to_string())
-            .or_else(|| fm.get_font("0"))
-            .ok_or_else(|| ZplError::FontError(format!("Font not found: {}", font_char)))
-    }
+    // ── font / text helpers ────────────────────────────────
 
     fn get_text_width(
         &self,
@@ -480,28 +470,10 @@ impl PdfNativeBackend {
         height: Option<u32>,
         width: Option<u32>,
     ) -> u32 {
-        let font = match self.get_font_arc(font_char) {
-            Ok(f) => f,
-            Err(_) => return 0,
-        };
-        let scale_y = height.unwrap_or(9) as f32;
-        let scale_x = width.unwrap_or(scale_y as u32) as f32;
-        let scale = PxScale {
-            x: scale_x,
-            y: scale_y,
-        };
-        let scaled = font.as_scaled(scale);
-        let mut w = 0.0_f32;
-        let mut last_glyph = None;
-        for c in text.chars() {
-            let gid = font.glyph_id(c);
-            if let Some(prev) = last_glyph {
-                w += scaled.kern(prev, gid);
-            }
-            w += scaled.h_advance(gid);
-            last_glyph = Some(gid);
+        match self.font_manager.as_ref() {
+            Some(fm) => fm.measure_text(font_char, height, width, text),
+            None => 0,
         }
-        w.ceil() as u32
     }
 
     // ── image embedding ────────────────────────────────────────────
@@ -711,7 +683,15 @@ impl PdfNativeBackend {
 
         // ── interpretation line ────────────────────────────────────
         if interpretation_line == 'Y' {
-            self.draw_interpretation_line(x, y, full_w, full_h, data, interpretation_line_above)?;
+            self.draw_interpretation_line(
+                x,
+                y,
+                full_w,
+                full_h,
+                mw,
+                data,
+                interpretation_line_above,
+            )?;
         }
 
         Ok(())
@@ -724,17 +704,18 @@ impl PdfNativeBackend {
         y: u32,
         full_w: u32,
         full_h: u32,
+        module_width: u32,
         data: &str,
         interpretation_line_above: char,
     ) -> ZplResult<()> {
         {
             let font_char = '0';
-            let text_h: u32 = 18;
+            let (text_h, gap) = crate::engine::font::interpretation_metrics(module_width);
             let text_y = if interpretation_line_above == 'Y' {
-                y.saturating_sub(text_h)
+                y.saturating_sub(text_h + gap)
             } else {
-                y + full_h
-            } + 6;
+                y + full_h + gap
+            };
 
             let text_width = self.get_text_width(data, font_char, Some(text_h), None);
             let text_x = if full_w > text_width {
@@ -861,24 +842,25 @@ impl ZplForgeBackend for PdfNativeBackend {
             return Ok(());
         }
 
-        let scale_y_dots = height.unwrap_or(9) as f32;
-        let scale_x_dots = width.unwrap_or(scale_y_dots as u32) as f32;
-        let px_scale = PxScale {
-            x: scale_x_dots,
-            y: scale_y_dots,
+        let layout = {
+            let fm = self
+                .font_manager
+                .as_ref()
+                .ok_or_else(|| ZplError::FontError("Font manager not initialized".into()))?;
+            fm.text_layout(font, height, width)
+                .ok_or_else(|| ZplError::FontError(format!("Font not found: {}", font)))?
+                .1
         };
-
-        // Compute ascent in a scoped borrow so `font_arc` is dropped before the mutable insert.
-        let ascent_dots = {
-            let font_arc = self.get_font_arc(font)?;
-            font_arc.as_scaled(px_scale).ascent()
-        } as f64;
 
         self.used_fonts.insert(font);
 
-        let scale_x_pt = self.d2pt(scale_x_dots as f64);
-        let scale_y_pt = self.d2pt(scale_y_dots as f64);
-        let h_dots = scale_y_dots as f64;
+        // PDF text space: `Tf 1` + a Tm scale of `s` renders a glyph em of
+        // `s` points, so the matrix carries the em sizes (not the ^A values).
+        let em_x_pt = self.d2pt(layout.em_x as f64);
+        let em_y_pt = self.d2pt(layout.em_y as f64);
+        // Distance from the character-cell top to the baseline, in dots.
+        let baseline_dots = layout.baseline as f64;
+        let h_dots = layout.cell_h as f64;
         let x = x as f64;
         let y = y as f64;
 
@@ -894,35 +876,35 @@ impl ZplForgeBackend for PdfNativeBackend {
         let tm = match orientation {
             'R' => [
                 0.0,
-                -scale_x_pt,
-                scale_y_pt,
+                -em_x_pt,
+                em_y_pt,
                 0.0,
-                self.x_pt(x + h_dots - ascent_dots),
+                self.x_pt(x + h_dots - baseline_dots),
                 self.height_pt - y * self.scale,
             ],
             'I' => [
-                -scale_x_pt,
+                -em_x_pt,
                 0.0,
                 0.0,
-                -scale_y_pt,
+                -em_y_pt,
                 self.x_pt(x + tw_dots),
-                self.height_pt - (y + h_dots - ascent_dots) * self.scale,
+                self.height_pt - (y + h_dots - baseline_dots) * self.scale,
             ],
             'B' => [
                 0.0,
-                scale_x_pt,
-                -scale_y_pt,
+                em_x_pt,
+                -em_y_pt,
                 0.0,
-                self.x_pt(x + ascent_dots),
+                self.x_pt(x + baseline_dots),
                 self.height_pt - (y + tw_dots) * self.scale,
             ],
             _ => [
-                scale_x_pt,
+                em_x_pt,
                 0.0,
                 0.0,
-                scale_y_pt,
+                em_y_pt,
                 self.x_pt(x),
-                self.height_pt - (y + ascent_dots) * self.scale,
+                self.height_pt - (y + baseline_dots) * self.scale,
             ],
         };
 
