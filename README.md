@@ -24,15 +24,15 @@ ZPL-Forge is engineered to deliver enterprise-grade performance and ultra-low la
 **Single Label Render Times (Measured in release mode using the embedded 130 KB TeX Gyre Heros Cn font):**
 
 - **Routing/Dispatch Label (`test_02`):**
-  - PNG Output (`PngBackend`): **0.62 ms**
-  - Native PDF Output (`PdfNativeBackend`): **2.06 ms**
+  - PNG Output (`PngBackend`): **0.68 ms**
+  - Native PDF Output (`PdfNativeBackend`): **2.18 ms**
 - **Standard Shipping Label (`test_01`):**
-  - PNG Output (`PngBackend`): **4.96 ms**
-  - Native PDF Output (`PdfNativeBackend`): **2.33 ms**
+  - PNG Output (`PngBackend`): **5.37 ms**
+  - Native PDF Output (`PdfNativeBackend`): **4.83 ms**
 
 **Massive Bulk Batching (Measured in release mode):**
 
-- **Native Vector PDF (1,000 Combined Labels):** **75 ms** total time (**0.1 ms / page**), producing a compact, searchable file of only **0.82 MB** (a throughput of over **13,000 pages per second**!).
+- **Native Vector PDF (1,000 Combined Labels via `render_pages`):** **69.74 ms** total time (**0.07 ms / page**), producing a compact, searchable file of only **0.86 MB** (a throughput of over **14,300 pages per second**!).
 
 ## Installation
 
