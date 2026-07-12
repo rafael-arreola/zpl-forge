@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use ab_glyph::{Font, PxScale, ScaleFont};
-
 use crate::{
     FontManager, ZplError, ZplResult,
     ast::parse_zpl,
@@ -17,29 +15,7 @@ fn measure_text_dots(
     width: Option<u32>,
     text: &str,
 ) -> u32 {
-    let mut buf = [0; 4];
-    let font_str = font_char.encode_utf8(&mut buf);
-    let font = match fm.get_font(font_str).or_else(|| fm.get_font("0")) {
-        Some(f) => f,
-        None => return 0,
-    };
-    let scale_y = height.unwrap_or(9) as f32;
-    let scale_x = width.unwrap_or(scale_y as u32) as f32;
-    let scaled = font.as_scaled(PxScale {
-        x: scale_x,
-        y: scale_y,
-    });
-    let mut w = 0.0_f32;
-    let mut last = None;
-    for c in text.chars() {
-        let gid = font.glyph_id(c);
-        if let Some(prev) = last {
-            w += scaled.kern(prev, gid);
-        }
-        w += scaled.h_advance(gid);
-        last = Some(gid);
-    }
-    w.ceil() as u32
+    fm.measure_text(font_char, height, width, text)
 }
 
 /// Greedy word-wrap for `^FB`: fits words into `max_width` dots, hard-breaking

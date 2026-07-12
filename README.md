@@ -24,15 +24,15 @@ ZPL-Forge is engineered to deliver enterprise-grade performance and ultra-low la
 **Single Label Render Times (Measured in release mode using the embedded 64 KB Iosevka Term Slab font):**
 
 - **Routing/Dispatch Label (`test_02`):**
-  - PNG Output (`PngBackend`): **0.63 ms**
-  - Native PDF Output (`PdfNativeBackend`): **2.50 ms**
+  - PNG Output (`PngBackend`): **0.62 ms**
+  - Native PDF Output (`PdfNativeBackend`): **2.06 ms**
 - **Standard Shipping Label (`test_01`):**
-  - PNG Output (`PngBackend`): **15.62 ms**
-  - Native PDF Output (`PdfNativeBackend`): **2.58 ms**
+  - PNG Output (`PngBackend`): **4.96 ms**
+  - Native PDF Output (`PdfNativeBackend`): **2.33 ms**
 
 **Massive Bulk Batching (Measured in release mode):**
 
-- **Native Vector PDF (1,000 Combined Labels):** **97.24 ms** total time (**0.1 ms / page**), producing a compact, searchable file of only **0.82 MB** (a throughput of over **10,000 pages per second**!).
+- **Native Vector PDF (1,000 Combined Labels):** **75 ms** total time (**0.1 ms / page**), producing a compact, searchable file of only **0.82 MB** (a throughput of over **13,000 pages per second**!).
 
 ## Installation
 
@@ -67,7 +67,9 @@ The library provides two backends for different needs.
 Best for web previews or raster printing. Gated under the `png` cargo feature.
 
 ```rust
-use zpl_forge::{ZplEngine, PngBackend};
+use std::collections::HashMap;
+use zpl_forge::{Resolution, Unit, ZplEngine};
+use zpl_forge::forge::png::PngBackend;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let zpl = "^XA^FO50,50^A0N,50,50^FDHello World^FS^XZ";
@@ -97,7 +99,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 Outputs selectable text and native vector graphics. Ultra-fast, extremely small file size, and requires zero rasterization. Gated under the `pdf` cargo feature.
 
 ```rust
-use zpl_forge::{ZplEngine, PdfNativeBackend};
+use std::collections::HashMap;
+use zpl_forge::{Resolution, Unit, ZplEngine};
+use zpl_forge::forge::pdf_native::PdfNativeBackend;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let zpl = "^XA^FO50,50^A0N,50,50^FDSelectable Text!^FS^XZ";
@@ -129,7 +133,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 Inject dynamic data into your ZPL without extra allocations. Simply use the `{{variable_name}}` syntax in your ZPL code and pass a variables map to `.render()`.
 
 ```rust
-use zpl_forge::{ZplEngine, PdfBackend};
+use std::collections::HashMap;
+use zpl_forge::{Resolution, Unit, ZplEngine};
+use zpl_forge::forge::png::PngBackend;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let zpl = "^XA^FO50,50^A0N,50,50^FDHello {{NAME}}^FS^XZ";
@@ -197,6 +203,64 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+### Custom Fonts
+
+ZPL-Forge ships with an embedded open-source font (Iosevka Term Slab) mapped to every ZPL identifier, so it works out of the box with zero system dependencies. To use your own typography, register TrueType (`.ttf`) or OpenType (`.otf`) bytes on a `FontManager` and attach it to the engine. Each font is bound to a range of ZPL identifiers (`A`–`Z`, `0`–`9`) and selected from ZPL with `^A` or `^CF`.
+
+```rust
+use std::collections::HashMap;
+use std::sync::Arc;
+use zpl_forge::{FontManager, Resolution, Unit, ZplEngine};
+use zpl_forge::forge::png::PngBackend;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut fonts = FontManager::default();
+
+    // From a bundled asset (compiled into your binary):
+    // fonts.register_font("Roboto", include_bytes!("../assets/Roboto-Regular.ttf"), '0', '0')?;
+
+    // From any file on disk, including OS font directories
+    // (macOS: /System/Library/Fonts, Linux: /usr/share/fonts, Windows: C:\Windows\Fonts):
+    let bytes = std::fs::read("/usr/share/fonts/truetype/roboto/Roboto-Regular.ttf")?;
+    fonts.register_font("Roboto", &bytes, 'T', 'T')?; // available as ^AT / ^CFT
+
+    let zpl = "^XA^FO50,50^ATN,50,50^FDRendered with Roboto^FS^XZ";
+    let mut engine = ZplEngine::new(zpl, Unit::Inches(4.0), Unit::Inches(2.0), Resolution::Dpi203)?;
+    engine.set_fonts(Arc::new(fonts));
+
+    let png = engine.render(PngBackend::new(), &HashMap::new())?;
+    std::fs::write("custom_font.png", png)?;
+    Ok(())
+}
+```
+
+See [`examples/custom_fonts.rs`](examples/custom_fonts.rs) for a runnable demo that registers ten different families at once.
+
+#### Weights and styles (Light / Regular / Bold)
+
+ZPL-Forge does not synthesize weights or slants — the glyphs come straight from the font file. To offer multiple weights, register one **static instance per weight** under its own identifier and pick it from ZPL:
+
+```rust
+fonts.register_font("Roboto Light", &light_bytes, 'L', 'L')?;   // ^ALN,40,40
+fonts.register_font("Roboto Regular", &regular_bytes, 'R', 'R')?; // ^ARN,40,40
+fonts.register_font("Roboto Bold", &bold_bytes, 'B', 'B')?;     // ^ABN,40,40
+```
+
+> **Variable fonts:** axes (`wght`, `wdth`, `MONO`, …) are not supported — a variable TTF renders at its default instance only. Export static instances first, e.g. with fonttools: `fonttools varLib.instancer Font-VF.ttf wght=700 -o Font-Bold.ttf`.
+
+#### Condensation (horizontal scale)
+
+Two ways to condense or expand text:
+
+1. **The `w` parameter of `^A`** — glyphs are scaled horizontally by the `w/h` ratio, exactly like a Zebra printer. `^A0N,60,40` renders 60-dot-tall glyphs compressed to ⅔ of their natural width; `^A0N,60,90` expands them 1.5×. Omitting `w` keeps the font's natural proportions.
+2. **Register a naturally condensed family** (e.g., Roboto Condensed, Archivo Narrow) when you want true condensed letterforms instead of a geometric squeeze.
+
+#### Identifier semantics: bitmap vs scalable
+
+To match real printer output, identifiers **`A`–`H`** emulate Zebra's built-in **bitmap fonts**: heights snap to integer magnifications of the original dot-matrix cell (font A is 9×5 dots) and the glyphs are stretched to the fixed cell aspect — this is what makes `^CFA,30` look exactly like Labelary/hardware. Identifiers **`0`–`9`** and **`I`–`Z`** use the **scalable** model (any height, natural glyph proportions, capital letters spanning ~75% of the `^A` height).
+
+> Register decorative or brand fonts on scalable identifiers (`0`–`9`, `I`–`Z`). A custom font placed on `A`–`H` inherits the bitmap cell geometry and will look artificially stretched.
 
 ## Supported ZPL Commands
 

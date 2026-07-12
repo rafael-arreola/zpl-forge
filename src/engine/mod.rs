@@ -15,7 +15,7 @@ mod backend;
 mod common;
 #[allow(clippy::module_inception)]
 mod engine;
-mod font;
+pub(crate) mod font;
 mod intr;
 mod state;
 

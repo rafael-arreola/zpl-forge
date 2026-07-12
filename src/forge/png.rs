@@ -7,7 +7,7 @@ use std::cmp::max;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use ab_glyph::{Font, PxScale, ScaleFont};
+use ab_glyph::{Font, ScaleFont};
 use base64::{Engine as _, engine::general_purpose};
 use image::{
     ImageBuffer, Rgb, RgbImage, Rgba, RgbaImage,
@@ -150,38 +150,10 @@ impl PngBackend {
         height: Option<u32>,
         width: Option<u32>,
     ) -> u32 {
-        let font = match self.font_manager.as_ref() {
-            Some(fm) => match fm.get_font(&font_char.to_string()) {
-                Some(f) => f,
-                None => match fm.get_font("0") {
-                    Some(f) => f,
-                    None => return 0,
-                },
-            },
-            None => return 0,
-        };
-
-        let scale_y = height.unwrap_or(9) as f32;
-        let scale_x = width.unwrap_or(scale_y as u32) as f32;
-        let scale = PxScale {
-            x: scale_x,
-            y: scale_y,
-        };
-
-        let scaled_font = font.as_scaled(scale);
-        let mut width = 0.0;
-        let mut last_glyph_id = None;
-
-        for c in text.chars() {
-            let glyph_id = font.glyph_id(c);
-            if let Some(last) = last_glyph_id {
-                width += scaled_font.kern(last, glyph_id);
-            }
-            width += scaled_font.h_advance(glyph_id);
-            last_glyph_id = Some(glyph_id);
+        match self.font_manager.as_ref() {
+            Some(fm) => fm.measure_text(font_char, height, width, text),
+            None => 0,
         }
-
-        width.ceil() as u32
     }
 }
 
@@ -214,23 +186,20 @@ impl ZplForgeBackend for PngBackend {
             return Ok(());
         }
 
-        let font_data = match self.font_manager.as_ref() {
-            Some(fm) => match fm.get_font(&font.to_string()) {
-                Some(f) => f.clone(),
-                None => match fm.get_font("0") {
-                    Some(f) => f.clone(),
-                    None => return Err(ZplError::FontError(format!("Font not found: {}", font))),
-                },
-            },
-            None => return Err(ZplError::FontError("Font manager not initialized".into())),
-        };
+        let fm = self
+            .font_manager
+            .as_ref()
+            .ok_or_else(|| ZplError::FontError("Font manager not initialized".into()))?;
+        let (font_arc, layout) = fm
+            .text_layout(font, height, width)
+            .ok_or_else(|| ZplError::FontError(format!("Font not found: {}", font)))?;
+        let font_data = font_arc.clone();
+        let scale = layout.px;
 
-        let scale_y = height.unwrap_or(9) as f32;
-        let scale_x = width.unwrap_or(scale_y as u32) as f32;
-        let scale = PxScale {
-            x: scale_x,
-            y: scale_y,
-        };
+        // imageproc places the baseline at `y + ascent`; shift so capital
+        // letters start exactly at the ZPL cell top (Zebra behavior).
+        let ascent = font_data.as_scaled(scale).ascent();
+        let y_offset = (layout.baseline - ascent).round() as i32;
 
         let text_color = self.parse_hex_color(&color);
 
@@ -239,7 +208,7 @@ impl ZplForgeBackend for PngBackend {
                 &mut self.canvas,
                 text_color,
                 x as i32,
-                y as i32,
+                y as i32 + y_offset,
                 scale,
                 &font_data,
                 text,
@@ -250,10 +219,10 @@ impl ZplForgeBackend for PngBackend {
         // Rotated text: render on a temporary transparent surface, rotate it, and blit
         // non-transparent pixels so the background stays transparent.
         let text_w = self.get_text_width(text, font, height, width).max(1);
-        let font_h = (scale_y as u32).max(1);
+        let font_h = (layout.cell_h.ceil() as u32).max(1);
         let mut tmp = RgbaImage::from_pixel(text_w, font_h, Rgba([0, 0, 0, 0]));
         let text_rgba = Rgba([text_color.0[0], text_color.0[1], text_color.0[2], 255]);
-        draw_text_mut(&mut tmp, text_rgba, 0, 0, scale, &font_data, text);
+        draw_text_mut(&mut tmp, text_rgba, 0, y_offset, scale, &font_data, text);
 
         let rotated = match orientation {
             'R' => rotate90(&tmp),
@@ -868,12 +837,12 @@ impl PngBackend {
 
         if interpretation_line == 'Y' {
             let font_char = '0';
-            let text_h = 18;
+            let (text_h, gap) = crate::engine::font::interpretation_metrics(module_width);
             let text_y = if interpretation_line_above == 'Y' {
-                y.saturating_sub(text_h)
+                y.saturating_sub(text_h + gap)
             } else {
-                y + full_h
-            } + 6;
+                y + full_h + gap
+            };
 
             let text_width = self.get_text_width(data, font_char, Some(text_h), None);
             let text_x = if full_w > text_width {
