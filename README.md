@@ -42,7 +42,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-zpl-forge = "0.3.1"
+zpl-forge = "0.3.2"
 ```
 
 ### Cargo Features
@@ -57,7 +57,7 @@ If you only need one output format, disable default features to cut compile time
 
 ```toml
 [dependencies]
-zpl-forge = { version = "0.3.1", default-features = false, features = ["pdf"] }
+zpl-forge = { version = "0.3.2", default-features = false, features = ["pdf"] }
 ```
 
 ## Quick Start
