@@ -20,11 +20,15 @@ use imageproc::drawing::{
 use imageproc::point::Point;
 use imageproc::rect::Rect;
 use rxing::common::BitMatrix;
+use rxing::datamatrix::encoder::SymbolShapeHint;
 use rxing::{BarcodeFormat, EncodeHintType, EncodeHintValue, EncodeHints};
 
-use super::{barcode_1d_format, barcode_cache};
+use super::{barcode_1d_format, barcode_cache, symbology};
 use crate::engine::{Barcode1DKind, FontManager, ZplForgeBackend};
 use crate::{ZplError, ZplResult};
+
+/// `rxing`'s numeric code for PDF417 text compaction.
+const PDF417_TEXT_COMPACTION: u32 = 1;
 
 /// A rendering backend that produces PNG images.
 ///
@@ -501,24 +505,14 @@ impl ZplForgeBackend for PngBackend {
         data: &str,
         reverse_print: bool,
     ) -> ZplResult<()> {
-        let (clean_data, hint_val) = if let Some(stripped) = data.strip_prefix(">:") {
-            (stripped, Some("B"))
-        } else if let Some(stripped) = data.strip_prefix(">;") {
-            (stripped, Some("C"))
-        } else if let Some(stripped) = data.strip_prefix(">9") {
-            (stripped, Some("A"))
-        } else {
-            (data, Some("B")) // Standard default is Code Set B
-        };
+        let (clean_data, code_set) = super::code128_code_set(data);
 
-        let hints = hint_val.map(|v| {
-            let mut h = HashMap::new();
-            h.insert(
-                EncodeHintType::FORCE_CODE_SET,
-                EncodeHintValue::ForceCodeSet(v.to_string()),
-            );
-            EncodeHints::from(h)
-        });
+        let mut h = HashMap::new();
+        h.insert(
+            EncodeHintType::FORCE_CODE_SET,
+            EncodeHintValue::ForceCodeSet(code_set.to_string()),
+        );
+        let hints = Some(EncodeHints::from(h));
 
         self.draw_1d_barcode(
             x,
@@ -526,13 +520,15 @@ impl ZplForgeBackend for PngBackend {
             orientation,
             height,
             module_width,
+            // Code 128 is a four-width symbology; ^BY's ratio does not apply.
+            0.0,
             clean_data,
             BarcodeFormat::CODE_128,
             reverse_print,
             interpretation_line,
             interpretation_line_above,
             hints,
-            hint_val.unwrap_or(""),
+            code_set,
         )
     }
 
@@ -548,9 +544,9 @@ impl ZplForgeBackend for PngBackend {
         data: &str,
         reverse_print: bool,
     ) -> ZplResult<()> {
-        let level = match error_correction {
+        let (ec, payload) = super::qr_field_data(data, error_correction);
+        let level = match ec {
             'L' => "L",
-            'M' => "M",
             'Q' => "Q",
             'H' => "H",
             _ => "M",
@@ -561,21 +557,25 @@ impl ZplForgeBackend for PngBackend {
             EncodeHintType::ERROR_CORRECTION,
             EncodeHintValue::ErrorCorrection(level.to_string()),
         );
-        hints.insert(
-            EncodeHintType::MARGIN,
-            EncodeHintValue::Margin("0".to_owned()),
-        );
         let hints: EncodeHints = hints.into();
 
         let bit_matrix = barcode_cache::encode_cached(
             BarcodeFormat::QR_CODE,
-            data,
+            payload,
             &format!("ec:{}", level),
             Some(&hints),
         )?;
 
         let mag = max(magnification, 1);
-        self.fill_matrix_cells(x, y, orientation, mag, mag, &bit_matrix, reverse_print);
+        self.fill_matrix_cells(
+            x,
+            y + super::QR_ORIGIN_Y_OFFSET,
+            orientation,
+            mag,
+            mag,
+            &bit_matrix,
+            reverse_print,
+        );
         Ok(())
     }
 
@@ -588,7 +588,16 @@ impl ZplForgeBackend for PngBackend {
         data: &str,
         reverse_print: bool,
     ) -> ZplResult<()> {
-        let bit_matrix = barcode_cache::encode_cached(BarcodeFormat::DATA_MATRIX, data, "", None)?;
+        // Zebra emits a square Data Matrix unless explicit rows/columns ask for
+        // a rectangle; `rxing` defaults to the smallest fitting symbol, which is
+        // often rectangular (26x12 instead of 18x18 for a 20-byte payload).
+        let hints = EncodeHints {
+            DataMatrixShape: Some(SymbolShapeHint::FORCE_SQUARE),
+            ..Default::default()
+        };
+
+        let bit_matrix =
+            barcode_cache::encode_cached(BarcodeFormat::DATA_MATRIX, data, "sq", Some(&hints))?;
 
         let m = max(module_size, 1);
         self.fill_matrix_cells(x, y, orientation, m, m, &bit_matrix, reverse_print);
@@ -606,27 +615,57 @@ impl ZplForgeBackend for PngBackend {
         data: &str,
         reverse_print: bool,
     ) -> ZplResult<()> {
-        let mut hints = HashMap::new();
-        hints.insert(
-            EncodeHintType::ERROR_CORRECTION,
-            EncodeHintValue::ErrorCorrection(security_level.min(8).to_string()),
-        );
-        hints.insert(
-            EncodeHintType::MARGIN,
-            EncodeHintValue::Margin("0".to_owned()),
-        );
-        let hints: EncodeHints = hints.into();
+        let ec = security_level.min(8);
+        let hints = EncodeHints {
+            ErrorCorrection: Some(ec.to_string()),
+            // Text compaction matches Zebra's choice for alphanumeric payloads.
+            Pdf417Compaction: Some(PDF417_TEXT_COMPACTION.to_string()),
+            Pdf417Dimensions: Some(super::pdf417_dimensions(None, None)),
+            ..Default::default()
+        };
 
         let bit_matrix = barcode_cache::encode_cached(
             BarcodeFormat::PDF_417,
             data,
-            &format!("ec:{}", security_level.min(8)),
+            &format!("ec:{ec}:c1:t"),
             Some(&hints),
         )?;
+        let bit_matrix = super::pdf417_descale(&bit_matrix)?;
 
         let cw = max(module_width, 1);
         let ch = max(row_height, 1);
         self.fill_matrix_cells(x, y, orientation, cw, ch, &bit_matrix, reverse_print);
+        Ok(())
+    }
+
+    fn draw_micropdf417(
+        &mut self,
+        x: u32,
+        y: u32,
+        orientation: char,
+        height: u32,
+        _mode: u32,
+        data: &str,
+        reverse_print: bool,
+    ) -> ZplResult<()> {
+        let bit_matrix = barcode_cache::encode_cached(BarcodeFormat::PDF_417, data, "", None)?;
+        let ch = max(height, 1);
+        self.fill_matrix_cells(x, y, orientation, 1, ch, &bit_matrix, reverse_print);
+        Ok(())
+    }
+
+    fn draw_aztec_code(
+        &mut self,
+        x: u32,
+        y: u32,
+        orientation: char,
+        magnification: u32,
+        data: &str,
+        reverse_print: bool,
+    ) -> ZplResult<()> {
+        let bit_matrix = barcode_cache::encode_cached(BarcodeFormat::AZTEC, data, "", None)?;
+        let m = max(magnification, 1);
+        self.fill_matrix_cells(x, y, orientation, m, m, &bit_matrix, reverse_print);
         Ok(())
     }
 
@@ -638,6 +677,7 @@ impl ZplForgeBackend for PngBackend {
         _check_digit: char,
         height: u32,
         module_width: u32,
+        ratio: f32,
         interpretation_line: char,
         interpretation_line_above: char,
         data: &str,
@@ -649,6 +689,7 @@ impl ZplForgeBackend for PngBackend {
             orientation,
             height,
             module_width,
+            ratio,
             data,
             BarcodeFormat::CODE_39,
             reverse_print,
@@ -667,17 +708,55 @@ impl ZplForgeBackend for PngBackend {
         orientation: char,
         height: u32,
         module_width: u32,
+        ratio: f32,
+        check_digit: char,
         interpretation_line: char,
         interpretation_line_above: char,
         data: &str,
         reverse_print: bool,
     ) -> ZplResult<()> {
+        // MSI and POSTNET have no rxing writer; both are encoded natively.
+        match kind {
+            Barcode1DKind::Msi => {
+                let check = symbology::MsiCheck::from_zpl(check_digit);
+                let elements = symbology::msi_elements(data, check, module_width, ratio);
+                let text = symbology::msi_text(data, check);
+                return self.draw_elements(
+                    x,
+                    y,
+                    orientation,
+                    height,
+                    module_width,
+                    &elements,
+                    reverse_print,
+                    interpretation_line,
+                    interpretation_line_above,
+                    &text,
+                );
+            }
+            Barcode1DKind::Postnet => {
+                return self.draw_postnet(
+                    x,
+                    y,
+                    orientation,
+                    height,
+                    module_width,
+                    data,
+                    reverse_print,
+                    interpretation_line,
+                    interpretation_line_above,
+                );
+            }
+            _ => {}
+        }
+
         self.draw_1d_barcode(
             x,
             y,
             orientation,
             height,
             module_width,
+            ratio,
             data,
             barcode_1d_format(kind),
             reverse_print,
@@ -808,6 +887,7 @@ impl PngBackend {
         orientation: char,
         height: u32,
         module_width: u32,
+        ratio: f32,
         data: &str,
         format: BarcodeFormat,
         reverse_print: bool,
@@ -816,11 +896,73 @@ impl PngBackend {
         hints: Option<EncodeHints>,
         hints_key: &str,
     ) -> ZplResult<()> {
+        let numeric_data;
+        let data = match format {
+            BarcodeFormat::EAN_13
+            | BarcodeFormat::EAN_8
+            | BarcodeFormat::UPC_A
+            | BarcodeFormat::UPC_E
+            | BarcodeFormat::ITF => {
+                numeric_data = data.chars().filter(|c| c.is_ascii_digit()).collect::<String>();
+                &numeric_data
+            }
+            _ => data,
+        };
+
+        let padded_data;
+        let data = if format == BarcodeFormat::ITF && data.len() % 2 != 0 {
+            padded_data = format!("0{}", data);
+            &padded_data
+        } else {
+            data
+        };
+
         let bit_matrix = barcode_cache::encode_cached(format, data, hints_key, hints.as_ref())?;
 
         let mw = max(module_width, 1);
+        // Two-width symbologies are re-laid-out at the ^BY ratio; every other
+        // symbology keeps the encoder's module widths.
+        let elements = symbology::matrix_elements(
+            &bit_matrix,
+            mw,
+            symbology::is_two_width(format).then_some(ratio),
+        );
+
+        self.draw_elements(
+            x,
+            y,
+            orientation,
+            height,
+            module_width,
+            &elements,
+            reverse_print,
+            interpretation_line,
+            interpretation_line_above,
+            data,
+        )
+    }
+
+    /// Paints a 1-D barcode from pre-computed dot-width elements and draws its
+    /// interpretation line.
+    ///
+    /// Shared by the `rxing`-encoded symbologies and the natively-encoded ones,
+    /// so bar placement, rotation and interpretation-line layout stay identical.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_elements(
+        &mut self,
+        x: u32,
+        y: u32,
+        orientation: char,
+        height: u32,
+        module_width: u32,
+        elements: &[symbology::Element],
+        reverse_print: bool,
+        interpretation_line: char,
+        interpretation_line_above: char,
+        data: &str,
+    ) -> ZplResult<()> {
         let bh = height;
-        let bw = bit_matrix.getWidth() * mw;
+        let bw: u32 = elements.iter().map(|e| e.width).sum();
 
         let (full_w, full_h) = match orientation {
             'N' | 'I' => (bw, bh),
@@ -850,27 +992,29 @@ impl PngBackend {
             }
         };
 
-        for gx in 0..bit_matrix.getWidth() {
-            if bit_matrix.get(gx, 0) {
-                let rect = transform_rect((gx * mw) as i32, 0, mw, bh);
+        let mut cursor = 0u32;
+        for element in elements {
+            if element.bar {
+                let rect = transform_rect(cursor as i32, 0, element.width, bh);
                 if reverse_print {
                     self.invert_rect(rect);
                 } else {
                     draw_filled_rect_mut(&mut self.canvas, rect, Rgb([0, 0, 0]));
                 }
             }
+            cursor += element.width;
         }
 
         if interpretation_line == 'Y' {
-            let font_char = '0';
-            let (text_h, gap) = crate::engine::font::interpretation_metrics(module_width);
+            let (font_char, text_h, text_w, gap) =
+                crate::engine::font::interpretation_metrics(module_width);
             let text_y = if interpretation_line_above == 'Y' {
                 y.saturating_sub(text_h + gap)
             } else {
                 y + full_h + gap
             };
 
-            let text_width = self.get_text_width(data, font_char, Some(text_h), None);
+            let text_width = self.get_text_width(data, font_char, Some(text_h), Some(text_w));
             let text_x = if full_w > text_width {
                 x + (full_w - text_width) / 2
             } else {
@@ -882,9 +1026,94 @@ impl PngBackend {
                 text_y,
                 font_char,
                 Some(text_h),
-                None,
+                Some(text_w),
                 'N',
                 data,
+                false,
+                None,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    /// Paints a POSTNET symbol.
+    ///
+    /// POSTNET is the one supported symbology that encodes data in bar *height*
+    /// rather than bar width, so it needs its own painter: all bars share the
+    /// module width and sit on a fixed pitch, and a binary 0 is a bottom-aligned
+    /// half-height bar.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_postnet(
+        &mut self,
+        x: u32,
+        y: u32,
+        orientation: char,
+        height: u32,
+        module_width: u32,
+        data: &str,
+        reverse_print: bool,
+        interpretation_line: char,
+        interpretation_line_above: char,
+    ) -> ZplResult<()> {
+        let bars = symbology::postnet_bars(data);
+        let (bar_w, gap) = symbology::postnet_pitch(module_width);
+        let pitch = bar_w + gap;
+        let short_h = ((height as f32) * symbology::POSTNET_SHORT_RATIO).round() as u32;
+        let full_w = bars.len() as u32 * bar_w + bars.len().saturating_sub(1) as u32 * gap;
+
+        for (i, bar) in bars.iter().enumerate() {
+            let h = match bar {
+                symbology::BarHeight::Full => height,
+                symbology::BarHeight::Half => short_h,
+            };
+            // Short bars are bottom-aligned with the full-height bars.
+            let top = height.saturating_sub(h);
+            let lx = i as u32 * pitch;
+            let rect = match orientation {
+                'R' => Rect::at(x as i32 + top as i32, y as i32 + lx as i32).of_size(h, bar_w),
+                'I' => Rect::at(
+                    x as i32 + (full_w - lx - bar_w) as i32,
+                    y as i32 + (height - h - top) as i32,
+                )
+                .of_size(bar_w, h),
+                'B' => Rect::at(
+                    x as i32 + (height - h - top) as i32,
+                    y as i32 + (full_w - lx - bar_w) as i32,
+                )
+                .of_size(h, bar_w),
+                _ => Rect::at(x as i32 + lx as i32, y as i32 + top as i32).of_size(bar_w, h),
+            };
+            if reverse_print {
+                self.invert_rect(rect);
+            } else {
+                draw_filled_rect_mut(&mut self.canvas, rect, Rgb([0, 0, 0]));
+            }
+        }
+
+        if interpretation_line == 'Y' {
+            let (font_char, text_h, text_w, gap) =
+                crate::engine::font::interpretation_metrics(module_width);
+            let text_y = if interpretation_line_above == 'Y' {
+                y.saturating_sub(text_h + gap)
+            } else {
+                y + height + gap
+            };
+            let digits: String = data.chars().filter(|c| c.is_ascii_digit()).collect();
+            let text_width = self.get_text_width(&digits, font_char, Some(text_h), Some(text_w));
+            let text_x = if full_w > text_width {
+                x + (full_w - text_width) / 2
+            } else {
+                x
+            };
+            self.draw_text(
+                text_x,
+                text_y,
+                font_char,
+                Some(text_h),
+                Some(text_w),
+                'N',
+                &digits,
                 false,
                 None,
             )?;

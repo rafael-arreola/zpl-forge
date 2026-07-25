@@ -1,10 +1,11 @@
 use nom::{
     Parser,
+    branch::alt,
     bytes::complete::{tag, take_till},
     combinator::{cut, map, opt},
 };
 
-use super::{Res, Span, opt_param, param, parse_char, parse_f32, parse_u32, parse_xy};
+use super::{Res, Span, opt_param, param, parse_char, parse_char_upper, parse_f32, parse_u32, parse_xy};
 use crate::ast::cmd;
 use crate::ast::commons::{Barcode1DKind, Justification, YesNo};
 
@@ -492,3 +493,236 @@ pub fn cmd_b7(input: Span) -> Res<cmd::Command> {
         },
     ))
 }
+
+/// ^B8 - EAN-8 Barcode (`^B8o,h,f,g`)
+pub fn cmd_b8(input: Span) -> Res<cmd::Command> {
+    let (input, _) = tag("^B8").parse(input)?;
+    let (rest, args) = cut(take_till(|c| c == '^')).parse(input)?;
+    let (args_input, orientation) = opt_param(parse_char_upper).parse(args)?;
+    let (args_input, height) = param(parse_u32).parse(args_input).unwrap_or((args_input, None));
+    let (args_input, interpretation_line) = param(parse_char_upper).parse(args_input).unwrap_or((args_input, None));
+    let (_, interpretation_line_above) = param(parse_char_upper).parse(args_input).unwrap_or((args_input, None));
+
+    Ok((
+        rest,
+        cmd::Command::Barcode1D {
+            kind: Barcode1DKind::Ean8,
+            orientation,
+            height,
+            interpretation_line,
+            interpretation_line_above,
+            check_digit: Some('Y'),
+        },
+    ))
+}
+
+/// ^B9 - UPC-E Barcode (`^B9o,h,f,g,e`)
+pub fn cmd_b9(input: Span) -> Res<cmd::Command> {
+    let (input, _) = tag("^B9").parse(input)?;
+    let (rest, args) = cut(take_till(|c| c == '^')).parse(input)?;
+    let (args_input, orientation) = opt_param(parse_char_upper).parse(args)?;
+    let (args_input, height) = param(parse_u32).parse(args_input).unwrap_or((args_input, None));
+    let (args_input, interpretation_line) = param(parse_char_upper).parse(args_input).unwrap_or((args_input, None));
+    let (args_input, interpretation_line_above) = param(parse_char_upper).parse(args_input).unwrap_or((args_input, None));
+    let (_, check_digit) = param(parse_char_upper).parse(args_input).unwrap_or((args_input, None));
+
+    Ok((
+        rest,
+        cmd::Command::Barcode1D {
+            kind: Barcode1DKind::UpcE,
+            orientation,
+            height,
+            interpretation_line,
+            interpretation_line_above,
+            check_digit,
+        },
+    ))
+}
+
+/// ^BB - Codabar Barcode (`^BBo,h,f,g,e,k,l`)
+pub fn cmd_bb(input: Span) -> Res<cmd::Command> {
+    let (input, _) = tag("^BB").parse(input)?;
+    let (rest, args) = cut(take_till(|c| c == '^')).parse(input)?;
+    let (args_input, orientation) = opt_param(parse_char_upper).parse(args)?;
+    let (args_input, height) = param(parse_u32).parse(args_input).unwrap_or((args_input, None));
+    let (args_input, interpretation_line) = param(parse_char_upper).parse(args_input).unwrap_or((args_input, None));
+    let (args_input, interpretation_line_above) = param(parse_char_upper).parse(args_input).unwrap_or((args_input, None));
+    let (_, check_digit) = param(parse_char_upper).parse(args_input).unwrap_or((args_input, None));
+
+    Ok((
+        rest,
+        cmd::Command::Barcode1D {
+            kind: Barcode1DKind::Codabar,
+            orientation,
+            height,
+            interpretation_line,
+            interpretation_line_above,
+            check_digit,
+        },
+    ))
+}
+
+/// ^BM - MSI Barcode (`^BMo,c,h,f,g,e`)
+pub fn cmd_bm(input: Span) -> Res<cmd::Command> {
+    let (input, _) = tag("^BM").parse(input)?;
+    let (rest, args) = cut(take_till(|c| c == '^')).parse(input)?;
+    let (args_input, orientation) = opt_param(parse_char_upper).parse(args)?;
+    let (args_input, check_digit) = param(parse_char_upper).parse(args_input).unwrap_or((args_input, None));
+    let (args_input, height) = param(parse_u32).parse(args_input).unwrap_or((args_input, None));
+    let (args_input, interpretation_line) = param(parse_char_upper).parse(args_input).unwrap_or((args_input, None));
+    let (_, interpretation_line_above) = param(parse_char_upper).parse(args_input).unwrap_or((args_input, None));
+
+    Ok((
+        rest,
+        cmd::Command::Barcode1D {
+            kind: Barcode1DKind::Msi,
+            orientation,
+            height,
+            interpretation_line,
+            interpretation_line_above,
+            check_digit,
+        },
+    ))
+}
+
+/// ^BZ - POSTNET Barcode (`^BZo,h,f,g`)
+pub fn cmd_bz(input: Span) -> Res<cmd::Command> {
+    let (input, _) = tag("^BZ").parse(input)?;
+    let (rest, args) = cut(take_till(|c| c == '^')).parse(input)?;
+    let (args_input, orientation) = opt_param(parse_char_upper).parse(args)?;
+    let (args_input, height) = param(parse_u32).parse(args_input).unwrap_or((args_input, None));
+    let (args_input, interpretation_line) = param(parse_char_upper).parse(args_input).unwrap_or((args_input, None));
+    let (_, interpretation_line_above) = param(parse_char_upper).parse(args_input).unwrap_or((args_input, None));
+
+    Ok((
+        rest,
+        cmd::Command::Barcode1D {
+            kind: Barcode1DKind::Postnet,
+            orientation,
+            height,
+            interpretation_line,
+            interpretation_line_above,
+            check_digit: Some('Y'),
+        },
+    ))
+}
+
+/// ^BS - UPC/EAN Extensions (`^BSo,h,f,g`)
+pub fn cmd_bs(input: Span) -> Res<cmd::Command> {
+    let (input, _) = tag("^BS").parse(input)?;
+    let (rest, args) = cut(take_till(|c| c == '^')).parse(input)?;
+    let (args_input, orientation) = opt_param(parse_char_upper).parse(args)?;
+    let (args_input, height) = param(parse_u32).parse(args_input).unwrap_or((args_input, None));
+    let (args_input, interpretation_line) = param(parse_char_upper).parse(args_input).unwrap_or((args_input, None));
+    let (_, interpretation_line_above) = param(parse_char_upper).parse(args_input).unwrap_or((args_input, None));
+
+    Ok((
+        rest,
+        cmd::Command::Barcode1D {
+            kind: Barcode1DKind::Extension25,
+            orientation,
+            height,
+            interpretation_line,
+            interpretation_line_above,
+            check_digit: Some('N'),
+        },
+    ))
+}
+
+
+/// ^B0 / ^BO - Aztec Code Barcode (`^B0a,b,c,d,e,f,g`)
+pub fn cmd_b0(input: Span) -> Res<cmd::Command> {
+    let (input, _) = alt((tag("^B0"), tag("^BO"))).parse(input)?;
+    let (rest, args) = cut(take_till(|c| c == '^')).parse(input)?;
+    let (args_input, orientation) = opt_param(parse_char_upper).parse(args)?;
+    let (args_input, magnification) = param(parse_u32).parse(args_input).unwrap_or((args_input, None));
+    let (args_input, extended_channel) = param(parse_char_upper)
+        .parse(args_input)
+        .map(|(i, c)| (i, c.map(|ch| ch == 'Y')))
+        .unwrap_or((args_input, None));
+    let (args_input, ecc_percent) = param(parse_u32).parse(args_input).unwrap_or((args_input, None));
+    let (args_input, menu_symbol) = param(parse_char_upper)
+        .parse(args_input)
+        .map(|(i, c)| (i, c.map(|ch| ch == 'Y')))
+        .unwrap_or((args_input, None));
+    let (args_input, symbols_count) = param(parse_u32).parse(args_input).unwrap_or((args_input, None));
+    let (_, id_field) = param(take_till(|c| c == ',' || c == '^'))
+        .parse(args_input)
+        .map(|(i, s)| (i, s.map(|val| val.to_string())))
+        .unwrap_or((args_input, None));
+
+    Ok((
+        rest,
+        cmd::Command::AztecCode {
+            orientation,
+            magnification,
+            extended_channel,
+            ecc_percent,
+            menu_symbol,
+            symbols_count,
+            id_field,
+        },
+    ))
+}
+
+/// ^BF - MicroPDF417 Barcode (`^BFo,h,m`)
+pub fn cmd_bf(input: Span) -> Res<cmd::Command> {
+    let (input, _) = tag("^BF").parse(input)?;
+    let (rest, args) = cut(take_till(|c| c == '^')).parse(input)?;
+    let (args_input, orientation) = opt_param(parse_char_upper).parse(args)?;
+    let (args_input, height) = param(parse_u32).parse(args_input).unwrap_or((args_input, None));
+    let (_, mode) = param(parse_u32).parse(args_input).unwrap_or((args_input, None));
+
+    Ok((
+        rest,
+        cmd::Command::MicroPdf417 {
+            orientation,
+            height,
+            mode,
+        },
+    ))
+}
+
+/// ^BR - GS1 DataBar / RSS Barcode (`^BRa,b,c,d,e,f`)
+pub fn cmd_br(input: Span) -> Res<cmd::Command> {
+    let (input, _) = tag("^BR").parse(input)?;
+    let (rest, args) = cut(take_till(|c| c == '^')).parse(input)?;
+    let (args_input, orientation) = opt_param(parse_char_upper).parse(args)?;
+    let (args_input, symbology_type) = param(parse_u32).parse(args_input).unwrap_or((args_input, None));
+    let (args_input, magnification) = param(parse_u32).parse(args_input).unwrap_or((args_input, None));
+    let (args_input, separator_height) = param(parse_u32).parse(args_input).unwrap_or((args_input, None));
+    let (args_input, height) = param(parse_u32).parse(args_input).unwrap_or((args_input, None));
+    let (_, segment_width) = param(parse_u32).parse(args_input).unwrap_or((args_input, None));
+
+    Ok((
+        rest,
+        cmd::Command::GS1DataBar {
+            orientation,
+            symbology_type,
+            magnification,
+            separator_height,
+            height,
+            segment_width,
+        },
+    ))
+}
+
+/// ^FH - Field Hexadecimal Escape (`^FHi`)
+pub fn cmd_fh(input: Span) -> Res<cmd::Command> {
+    let (input, _) = tag("^FH").parse(input)?;
+    let (input, indicator) = opt_param(parse_char).parse(input)?;
+    Ok((
+        input,
+        cmd::Command::FieldHexEscape {
+            indicator: indicator.or(Some('_')),
+        },
+    ))
+}
+
+/// ^CI - Change International Font / Encoding (`^CIa`)
+pub fn cmd_ci(input: Span) -> Res<cmd::Command> {
+    let (input, _) = tag("^CI").parse(input)?;
+    let (input, charset) = cut(opt_param(parse_u32)).parse(input)?;
+    Ok((input, cmd::Command::ChangeIntFont { charset }))
+}
+

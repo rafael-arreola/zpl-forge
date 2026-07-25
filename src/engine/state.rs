@@ -32,6 +32,12 @@ pub struct ZplInstructionState {
     pub condition: Option<(String, String)>,
     /// `^FB` block formatting for the next text field.
     pub field_block: Option<crate::engine::common::TextBlock>,
+    /// Hexadecimal escape character indicator (set by `^FH`, e.g., '_').
+    pub hex_escape: Option<char>,
+    /// Character set encoding ID (set by `^CI`).
+    pub charset: u32,
+    /// Whether the current field position was defined by `^FT` (baseline origin).
+    pub is_typeset: bool,
 }
 
 /// Represents absolute positioning for a field.
@@ -135,8 +141,12 @@ pub enum ZplInstructionType {
     DataMatrix,
     /// PDF417 barcode.
     Pdf417,
-    /// Generic 1-D barcode (EAN-13, UPC-A, ITF, Code 93).
+    /// Generic 1-D barcode (EAN-13, UPC-A, ITF, Code 93, EAN-8, UPC-E, Codabar, MSI, Postnet, GS1 DataBar).
     Barcode1D(crate::engine::common::Barcode1DKind),
+    /// MicroPDF417 2D barcode.
+    MicroPdf417,
+    /// Aztec Code 2D barcode.
+    AztecCode,
     /// Diagonal line.
     GraphicDiagonal,
     /// Custom color image data.

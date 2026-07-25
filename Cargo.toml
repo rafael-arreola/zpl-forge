@@ -37,7 +37,7 @@ imageproc = { version = "0.27", default-features = false, features = [
     "text",
     "rayon",
 ], optional = true }
-base64 = { version = "0.22.1", optional = true }
+base64 = { version = "0.23", optional = true }
 # default-features off: we only use the barcode *encoder* (MultiFormatWriter);
 # rxing's defaults pull the full image decode stack (avif/rav1e, exr, tiff...).
 # `encoding_rs` is mandatory for its CharacterSet support. Since 0.9 the
@@ -50,6 +50,7 @@ rxing = { version = "0.9", default-features = false, features = [
     "qrcode",
     "datamatrix",
     "pdf417",
+    "aztec",
 ], optional = true }
 tracing = { version = "0.1", optional = true }
 # default-features off: defaults pull three date-time crates (chrono, jiff, time);

@@ -331,6 +331,57 @@ pub enum Command {
         truncate: Option<YesNo>,
     },
 
+
+    /// ^BF - MicroPDF417 Barcode
+    MicroPdf417 {
+        /// Orientation (N, R, I, B)
+        orientation: Option<char>,
+        /// Bar height in dots
+        height: Option<u32>,
+        /// Mode (0-33)
+        mode: Option<u32>,
+    },
+
+    /// ^B0 / ^BO - Aztec Code Barcode
+    AztecCode {
+        /// Orientation (N, R, I, B)
+        orientation: Option<char>,
+        /// Magnification factor (1-10)
+        magnification: Option<u32>,
+        /// Extended channel (Y/N)
+        extended_channel: Option<bool>,
+        /// Error control / ECC percentage (0-99)
+        ecc_percent: Option<u32>,
+        /// Menu symbol (Y/N)
+        menu_symbol: Option<bool>,
+        /// Symbols count for structured append
+        symbols_count: Option<u32>,
+        /// ID field for structured append
+        id_field: Option<String>,
+    },
+
+    /// ^BR - GS1 DataBar / RSS Barcode
+    GS1DataBar {
+        /// Orientation (N, R, I, B)
+        orientation: Option<char>,
+        /// Symbology type (1=RSS14, 2=Truncated, 3=Stacked, etc.)
+        symbology_type: Option<u32>,
+        /// Magnification (1-10)
+        magnification: Option<u32>,
+        /// Separator height
+        separator_height: Option<u32>,
+        /// Barcode height in dots
+        height: Option<u32>,
+        /// Segment width (even numbers 2-22)
+        segment_width: Option<u32>,
+    },
+
+    /// ^FH - Field Hexadecimal Escape
+    FieldHexEscape {
+        /// Hexadecimal indicator character (defaults to '_')
+        indicator: Option<char>,
+    },
+
     /// Unsupported or unknown command
     UnsupportedCommand {
         /// Command code (e.g., ^XY)

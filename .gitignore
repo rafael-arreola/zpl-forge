@@ -3,3 +3,14 @@
 *.ttf
 !src/assets/*.ttf
 .claude
+.parity/
+output_comparisons/
+tests
+tools
+
+# Generated example outputs
+examples/*.png
+examples/*.pdf
+!examples/reference.png
+!examples/showcase*.png
+!examples/showcase*.pdf

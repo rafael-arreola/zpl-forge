@@ -3,6 +3,46 @@ use crate::ZplResult;
 use crate::ast::cmd;
 use crate::tools;
 
+/// `^BY` wide:narrow ratio applied when a label never sets one.
+///
+/// The ZPL default is 3.0. Two-width symbologies rendered at the encoder's own
+/// fixed ratio instead, which made Code 39 come out 23% too narrow whenever
+/// `^BY` was omitted.
+const DEFAULT_BAR_RATIO: f64 = 3.0;
+
+/// Decodes hexadecimal escape sequences (e.g. `_XX`) inside `FieldData` strings when `^FH` is active.
+fn unescape_hex(data: &str, indicator: char) -> String {
+    let mut result = String::with_capacity(data.len());
+    let mut chars = data.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == indicator {
+            let mut hex_str = String::new();
+            if let Some(&c1) = chars.peek()
+                && c1.is_ascii_hexdigit()
+            {
+                hex_str.push(chars.next().unwrap());
+                if let Some(&c2) = chars.peek()
+                    && c2.is_ascii_hexdigit()
+                {
+                    hex_str.push(chars.next().unwrap());
+                }
+            }
+            if hex_str.len() == 2 {
+                if let Ok(byte) = u8::from_str_radix(&hex_str, 16) {
+                    result.push(byte as char);
+                    continue;
+                }
+            }
+            result.push(indicator);
+            result.push_str(&hex_str);
+        } else {
+            result.push(ch);
+        }
+    }
+    result
+}
+
 /// A builder that converts a sequence of AST commands into renderable instructions.
 ///
 /// It maintains a state machine to track the current label configuration (position,
@@ -48,19 +88,31 @@ impl ZplInstructionBuilder {
                     if let Some(y) = y {
                         self.state.position.y = y;
                     }
+                    self.state.is_typeset = false;
                 }
 
                 cmd::Command::FieldTypeset { x, y } => {
                     if let Some(x) = x {
-                        self.state.typeset.x = self.state.typeset.x.saturating_add(x);
+                        self.state.typeset.x = x;
                     }
                     if let Some(y) = y {
-                        self.state.typeset.y = self.state.typeset.y.saturating_add(y);
+                        self.state.typeset.y = y;
                     }
+                    self.state.is_typeset = true;
                 }
 
                 cmd::Command::FieldReverse => {
                     self.state.reverse = !self.state.reverse;
+                }
+
+                cmd::Command::FieldHexEscape { indicator } => {
+                    self.state.hex_escape = indicator;
+                }
+
+                cmd::Command::ChangeIntFont { charset } => {
+                    if let Some(c) = charset {
+                        self.state.charset = c;
+                    }
                 }
 
                 cmd::Command::FontSpec {
@@ -96,7 +148,12 @@ impl ZplInstructionBuilder {
                 }
 
                 cmd::Command::FieldData { data } => {
-                    self.state.value = Some(data);
+                    let unescaped = if let Some(indicator) = self.state.hex_escape {
+                        unescape_hex(&data, indicator)
+                    } else {
+                        data
+                    };
+                    self.state.value = Some(unescaped);
                 }
 
                 cmd::Command::FieldBlock {
@@ -358,6 +415,40 @@ impl ZplInstructionBuilder {
                     self.state.instruction_type = Some(state::ZplInstructionType::QRCode);
                 }
 
+                cmd::Command::MicroPdf417 { orientation, height, mode } => {
+                    self.state.attributes.orientation = orientation;
+                    self.state.metrics.height = height.unwrap_or(10);
+                    self.state.params.model = mode.unwrap_or(0);
+                    self.state.instruction_type = Some(state::ZplInstructionType::MicroPdf417);
+                }
+
+                cmd::Command::AztecCode {
+                    orientation,
+                    magnification,
+                    extended_channel: _,
+                    ecc_percent: _,
+                    menu_symbol: _,
+                    symbols_count: _,
+                    id_field: _,
+                } => {
+                    self.state.attributes.orientation = orientation;
+                    self.state.metrics.thickness = magnification.unwrap_or(2);
+                    self.state.instruction_type = Some(state::ZplInstructionType::AztecCode);
+                }
+
+                cmd::Command::GS1DataBar {
+                    orientation,
+                    symbology_type: _,
+                    magnification: _,
+                    separator_height: _,
+                    height,
+                    segment_width: _,
+                } => {
+                    self.state.attributes.orientation = orientation;
+                    self.state.metrics.height = height.unwrap_or(25);
+                    self.state.instruction_type = Some(state::ZplInstructionType::Barcode1D(common::Barcode1DKind::GS1DataBar));
+                }
+
                 cmd::Command::CustomImage {
                     width,
                     height,
@@ -375,8 +466,12 @@ impl ZplInstructionBuilder {
 
                 // Apply the instruction with the current state
                 cmd::Command::FieldSeparator => {
-                    let x = self.state.position.x;
-                    let y = self.state.position.y;
+                    let (x, y) = if self.state.is_typeset {
+                        let font_h = self.state.font.height.unwrap_or(30);
+                        (self.state.typeset.x, self.state.typeset.y.saturating_sub(font_h))
+                    } else {
+                        (self.state.position.x, self.state.position.y)
+                    };
                     let data = self.state.value.take().unwrap_or_default();
                     let reverse_print = self.state.reverse;
                     let condition = self.state.condition.take();
@@ -401,7 +496,12 @@ impl ZplInstructionBuilder {
                                 instructions.push(common::ZplInstruction::GraphicCircle {
                                     x,
                                     y,
-                                    radius: self.state.metrics.width,
+                                    // `^GC`'s first parameter is a *diameter*,
+                                    // and the symbol's bounding box starts at
+                                    // the field origin. Passing it straight
+                                    // through as a radius drew every circle at
+                                    // twice its requested size.
+                                    radius: self.state.metrics.width / 2,
                                     thickness: self.state.metrics.thickness,
                                     color: self.state.attributes.line_color.unwrap_or('B'),
                                     custom_color: self.state.attributes.custom_line_color.clone(),
@@ -485,6 +585,7 @@ impl ZplInstructionBuilder {
                                     } else {
                                         2
                                     },
+                                    ratio: self.state.params.ratio.unwrap_or(DEFAULT_BAR_RATIO) as f32,
                                     interpretation_line: self
                                         .state
                                         .attributes
@@ -512,6 +613,8 @@ impl ZplInstructionBuilder {
                                     } else {
                                         2
                                     },
+                                    ratio: self.state.params.ratio.unwrap_or(DEFAULT_BAR_RATIO) as f32,
+                                    check_digit: self.state.attributes.check_digit.unwrap_or('B'),
                                     interpretation_line: self
                                         .state
                                         .attributes
@@ -582,6 +685,29 @@ impl ZplInstructionBuilder {
                                         .error_correction
                                         .unwrap_or('M'),
                                     mask: self.state.params.mask,
+                                    data,
+                                    reverse_print,
+                                    condition,
+                                });
+                            }
+                            state::ZplInstructionType::MicroPdf417 => {
+                                instructions.push(common::ZplInstruction::MicroPdf417 {
+                                    x,
+                                    y,
+                                    orientation: self.state.attributes.orientation.unwrap_or('N'),
+                                    height: self.state.metrics.height,
+                                    mode: self.state.params.model,
+                                    data,
+                                    reverse_print,
+                                    condition,
+                                });
+                            }
+                            state::ZplInstructionType::AztecCode => {
+                                instructions.push(common::ZplInstruction::AztecCode {
+                                    x,
+                                    y,
+                                    orientation: self.state.attributes.orientation.unwrap_or('N'),
+                                    magnification: self.state.metrics.thickness,
                                     data,
                                     reverse_print,
                                     condition,

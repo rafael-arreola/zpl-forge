@@ -27,10 +27,13 @@ const FONT_MAP: &[char] = &[
     'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
 ];
 
-/// Zebra scalable fonts (e.g. `^A0`): capital letters span ~75% of the `^A`
-/// height with the cap top sitting exactly on the field origin. Calibrated
-/// against Labelary renders across `^A` sizes 30-190.
-const SCALABLE_CAP_RATIO: f32 = 0.75;
+/// Zebra scalable fonts (e.g. `^A0`): capital letters span ~73% of the `^A`
+/// height with the cap top sitting exactly on the field origin.
+///
+/// Re-calibrated against Labelary by measuring rendered advance width for
+/// `^A0` at heights 20/30/50/80/120: the previous 0.75 overshot reference
+/// width by a uniform 2.5% once the `PxScale` normalization below was fixed.
+const SCALABLE_CAP_RATIO: f32 = 0.7315;
 
 /// Default `^A` height in dots when none was specified (ZPL font A default).
 const DEFAULT_FONT_HEIGHT: u32 = 9;
@@ -130,15 +133,31 @@ pub(crate) struct TextLayout {
     pub cell_h: f32,
 }
 
-/// Interpretation-line geometry for 1-D barcodes: `(font_height, gap)` in
-/// dots, both proportional to the module width as rendered by Labelary
-/// (digit ink measured 36 dots tall, 6 dots below the bars, at `^BY5`).
-pub(crate) fn interpretation_metrics(module_width: u32) -> (u32, u32) {
-    let module = module_width.max(1) as f32;
-    let text_h = (module * 36.0 / 5.0 / SCALABLE_CAP_RATIO).round() as u32;
-    let gap = ((module * 1.2).round() as u32).max(1);
-    (text_h, gap)
+/// Interpretation-line geometry for 1-D barcodes, as
+/// `(font, height, width, gap)` in dots.
+///
+/// Zebra draws the interpretation line in built-in bitmap font A magnified by
+/// the module width, not in the scalable font: at `^BY2` the digits measure 14
+/// dots of cap height (7 x 2) on a 12-dot advance (6 x 2), and at `^BY5` 35-36
+/// dots tall, both matching Labelary. The baseline sits a fixed 6 dots below
+/// the bars regardless of module width.
+///
+/// Returning the font A cell dimensions lets [`FontManager::text_layout`]
+/// recover a magnification of exactly `module_width`.
+pub(crate) fn interpretation_metrics(module_width: u32) -> (char, u32, u32, u32) {
+    let mag = module_width.max(1);
+    let cell = bitmap_cell('A').expect("font A has a bitmap cell");
+    (
+        'A',
+        cell.base_h as u32 * mag,
+        cell.base_w as u32 * mag,
+        INTERPRETATION_GAP,
+    )
 }
+
+/// Vertical gap in dots between the bottom of the bars and the top of the
+/// interpretation line. Measured constant across `^BY` module widths.
+const INTERPRETATION_GAP: u32 = 6;
 
 /// Manages fonts and their mapping to ZPL font identifiers.
 ///
@@ -255,11 +274,18 @@ impl FontManager {
             (em_x, em_y, cap_px, h)
         };
 
-        // ab_glyph's PxScale maps (ascent - descent) to its value, so convert
-        // the em sizes through the font's own vertical extent.
+        // `ab_glyph` resolves a `PxScale` against `height_unscaled`
+        // (`ascent - descent`), not against the em square: its scale factor is
+        // `scale.y / height_unscaled`. Assigning an em size straight to
+        // `PxScale` therefore renders it `units_per_em / height_unscaled` times
+        // too small - a 1.41x shortfall for TeX Gyre Heros Cn and 1.25x for
+        // Iosevka, which is exactly the text undersizing measured against
+        // Labelary. Pre-multiply by that ratio so `em_x`/`em_y` land as true
+        // em sizes in dots.
+        let px_norm = metrics.height_unscaled / metrics.units_per_em;
         let px = PxScale {
-            x: em_x * metrics.height_unscaled / metrics.units_per_em,
-            y: em_y * metrics.height_unscaled / metrics.units_per_em,
+            x: em_x * px_norm,
+            y: em_y * px_norm,
         };
 
         Some((

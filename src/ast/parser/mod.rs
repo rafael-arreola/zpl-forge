@@ -69,6 +69,19 @@ pub fn parse_zpl(input: &str) -> ZplResult<Vec<cmd::Command>> {
                 custom::cmd_gtc,
                 custom::cmd_glc,
                 custom::cmd_ifc,
+            )),
+            alt((
+                standard::cmd_b8,
+                standard::cmd_b9,
+                standard::cmd_bb,
+                standard::cmd_bm,
+                standard::cmd_bz,
+                standard::cmd_bs,
+                standard::cmd_b0,
+                standard::cmd_bf,
+                standard::cmd_br,
+                standard::cmd_fh,
+                standard::cmd_ci,
                 cmd_unsupported,
             )),
         )),
@@ -115,6 +128,18 @@ pub fn cmd_unsupported(input: Span) -> Res<cmd::Command> {
 /// Used to extract single-character parameters (e.g., orientation, font name) from ZPL fields.
 pub fn parse_char(input: Span) -> Res<char> {
     none_of(",^\r\n \t").parse(input)
+}
+
+/// Parses a single character and converts it to ASCII uppercase for case-insensitive parameter matching.
+///
+/// # Arguments
+/// * `input` - Input slice of ZPL text.
+///
+/// # Returns
+/// An `IResult` containing the remaining input and the parsed uppercase `char`.
+pub fn parse_char_upper(input: Span) -> Res<char> {
+    let (input, c) = none_of(",^\r\n \t").parse(input)?;
+    Ok((input, c.to_ascii_uppercase()))
 }
 
 /// Parses an unsigned 32-bit integer from decimal digit characters.

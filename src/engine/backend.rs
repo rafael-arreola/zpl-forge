@@ -143,6 +143,8 @@ pub trait ZplForgeBackend {
         orientation: char,
         height: u32,
         module_width: u32,
+        ratio: f32,
+        check_digit: char,
         interpretation_line: char,
         interpretation_line_above: char,
         data: &str,
@@ -203,11 +205,39 @@ pub trait ZplForgeBackend {
         check_digit: char,
         height: u32,
         module_width: u32,
+        ratio: f32,
         interpretation_line: char,
         interpretation_line_above: char,
         data: &str,
         reverse_print: bool,
     ) -> ZplResult<()>;
+
+    /// Draws a MicroPDF417 barcode.
+    fn draw_micropdf417(
+        &mut self,
+        _x: u32,
+        _y: u32,
+        _orientation: char,
+        _height: u32,
+        _mode: u32,
+        _data: &str,
+        _reverse_print: bool,
+    ) -> ZplResult<()> {
+        Ok(())
+    }
+
+    /// Draws an Aztec Code barcode.
+    fn draw_aztec_code(
+        &mut self,
+        _x: u32,
+        _y: u32,
+        _orientation: char,
+        _magnification: u32,
+        _data: &str,
+        _reverse_print: bool,
+    ) -> ZplResult<()> {
+        Ok(())
+    }
 
     /// Finalizes the rendering process and returns the resulting data.
     fn finalize(&mut self) -> ZplResult<Vec<u8>>;

@@ -61,3 +61,35 @@ pub use error::{ZplError, ZplResult};
 
 #[cfg(feature = "tracing")]
 pub(crate) const TARGET: &str = "zpl-forge";
+
+/// Renders a ZPL string directly to native vector PDF bytes using default label dimensions (4x6 inches at 203 DPI).
+///
+/// # Arguments
+/// * `zpl` - The raw ZPL string to render.
+///
+/// # Returns
+/// A `ZplResult<Vec<u8>>` containing the raw PDF document bytes.
+///
+/// # Errors
+/// Returns [`ZplError::ParseError`] if the ZPL string contains malformed syntax, or [`ZplError::EmptyInput`] if input is empty.
+#[cfg(feature = "pdf")]
+pub fn render_pdf(zpl: &str) -> ZplResult<Vec<u8>> {
+    let engine = ZplEngine::new(zpl, Unit::Inches(4.0), Unit::Inches(6.0), Resolution::Dpi203)?;
+    engine.to_pdf()
+}
+
+/// Renders a ZPL string directly to PNG image bytes using default label dimensions (4x6 inches at 203 DPI).
+///
+/// # Arguments
+/// * `zpl` - The raw ZPL string to render.
+///
+/// # Returns
+/// A `ZplResult<Vec<u8>>` containing the raw PNG image bytes.
+///
+/// # Errors
+/// Returns [`ZplError::ParseError`] if the ZPL string contains malformed syntax, or [`ZplError::EmptyInput`] if input is empty.
+#[cfg(feature = "png")]
+pub fn render_png(zpl: &str) -> ZplResult<Vec<u8>> {
+    let engine = ZplEngine::new(zpl, Unit::Inches(4.0), Unit::Inches(6.0), Resolution::Dpi203)?;
+    engine.to_png()
+}

@@ -1,0 +1,5 @@
+^XA
+^FO50,50^CF0,40^FDZPL Forge Barcode Parity Test^FS
+^FO50,120^BY3,2,100^BCN,100,Y,N,N^FD123456789^FS
+^FO50,280^BQN,2,6^FDQA,https://zplforge.dev^FS
+^XZ

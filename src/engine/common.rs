@@ -132,8 +132,33 @@ pub enum ZplInstruction {
         orientation: char,
         height: u32,
         module_width: u32,
+        /// `^BY` wide:narrow ratio. ZPL defaults to 3.0.
+        ratio: f32,
+        /// Check-digit mode as spelled by the symbology's own command.
+        check_digit: char,
         interpretation_line: char,
         interpretation_line_above: char,
+        data: String,
+        reverse_print: bool,
+        condition: Option<(String, String)>,
+    },
+    /// Draws a MicroPDF417 2D barcode (`^BF`).
+    MicroPdf417 {
+        x: u32,
+        y: u32,
+        orientation: char,
+        height: u32,
+        mode: u32,
+        data: String,
+        reverse_print: bool,
+        condition: Option<(String, String)>,
+    },
+    /// Draws an Aztec Code 2D barcode (`^B0`/`^BO`).
+    AztecCode {
+        x: u32,
+        y: u32,
+        orientation: char,
+        magnification: u32,
         data: String,
         reverse_print: bool,
         condition: Option<(String, String)>,
@@ -186,6 +211,8 @@ pub enum ZplInstruction {
         check_digit: char,
         height: u32,
         module_width: u32,
+        /// `^BY` wide:narrow ratio. ZPL defaults to 3.0.
+        ratio: f32,
         interpretation_line: char,
         interpretation_line_above: char,
         data: String,
@@ -237,12 +264,18 @@ impl Resolution {
     }
 
     /// Returns the dots per inch for this resolution.
+    ///
+    /// These are the *nominal* ratings Zebra prints on its hardware, not the
+    /// exact `dpmm * 25.4` conversions (which would give 203.2 / 304.8 /
+    /// 609.6). Firmware maps inches to dots with the nominal value, so a 4 x 6
+    /// in label is exactly 812 x 1218 dots at 8 dpmm rather than 813 x 1219.
+    /// Using the exact conversion put every canvas one dot over.
     pub fn dpi(&self) -> f32 {
         match self {
             Resolution::Dpi152 => 152.0,
-            Resolution::Dpi203 => 203.2,
-            Resolution::Dpi300 => 304.8,
-            Resolution::Dpi600 => 609.6,
+            Resolution::Dpi203 => 203.0,
+            Resolution::Dpi300 => 300.0,
+            Resolution::Dpi600 => 600.0,
             Resolution::Custom(val) => *val,
         }
     }

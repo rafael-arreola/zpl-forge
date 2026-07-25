@@ -14,9 +14,10 @@ use flate2::Compression;
 use flate2::write::ZlibEncoder;
 use lopdf::{Document, FontData, Object, Stream, dictionary};
 use rxing::common::BitMatrix;
+use rxing::datamatrix::encoder::SymbolShapeHint;
 use rxing::{BarcodeFormat, EncodeHintType, EncodeHintValue, EncodeHints};
 
-use super::{barcode_1d_format, barcode_cache};
+use super::{barcode_1d_format, barcode_cache, symbology};
 use crate::engine::{Barcode1DKind, FontManager, ZplForgeBackend};
 use crate::{ZplError, ZplResult};
 
@@ -635,6 +636,7 @@ impl PdfNativeBackend {
         orientation: char,
         height: u32,
         module_width: u32,
+        ratio: f32,
         data: &str,
         format: BarcodeFormat,
         reverse_print: bool,
@@ -643,11 +645,71 @@ impl PdfNativeBackend {
         hints: Option<EncodeHints>,
         hints_key: &str,
     ) -> ZplResult<()> {
+        let numeric_data;
+        let data = match format {
+            BarcodeFormat::EAN_13
+            | BarcodeFormat::EAN_8
+            | BarcodeFormat::UPC_A
+            | BarcodeFormat::UPC_E
+            | BarcodeFormat::ITF => {
+                numeric_data = data.chars().filter(|c| c.is_ascii_digit()).collect::<String>();
+                &numeric_data
+            }
+            _ => data,
+        };
+
+        let padded_data;
+        let data = if format == BarcodeFormat::ITF && data.len() % 2 != 0 {
+            padded_data = format!("0{}", data);
+            &padded_data
+        } else {
+            data
+        };
+
         let bit_matrix = barcode_cache::encode_cached(format, data, hints_key, hints.as_ref())?;
 
         let mw = max(module_width, 1);
+        // Two-width symbologies are re-laid-out at the ^BY ratio; every other
+        // symbology keeps the encoder's module widths.
+        let elements = symbology::matrix_elements(
+            &bit_matrix,
+            mw,
+            symbology::is_two_width(format).then_some(ratio),
+        );
+
+        self.draw_elements(
+            x,
+            y,
+            orientation,
+            height,
+            module_width,
+            &elements,
+            reverse_print,
+            interpretation_line,
+            interpretation_line_above,
+            data,
+        )
+    }
+
+    /// Emits a 1-D barcode from pre-computed dot-width elements plus its
+    /// interpretation line, shared by rxing-encoded and natively-encoded
+    /// symbologies.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_elements(
+        &mut self,
+        x: u32,
+        y: u32,
+        orientation: char,
+        height: u32,
+        module_width: u32,
+        elements: &[symbology::Element],
+        reverse_print: bool,
+        interpretation_line: char,
+        interpretation_line_above: char,
+        data: &str,
+    ) -> ZplResult<()> {
         let bh = height;
-        let bw = bit_matrix.getWidth() * mw;
+        let bw: u32 = elements.iter().map(|e| e.width).sum();
 
         let (full_w, full_h) = match orientation {
             'R' | 'B' => (bh, bw),
@@ -660,16 +722,27 @@ impl PdfNativeBackend {
             self.set_fill_color(0.0, 0.0, 0.0);
         }
 
-        for gx in 0..bit_matrix.getWidth() {
-            if bit_matrix.get(gx, 0) {
-                let (rx, ry, rw, rh) =
-                    Self::transform_1d_bar(orientation, x, y, (gx * mw) as i32, 0, mw, bh, bw, bh);
+        let mut cursor = 0u32;
+        for element in elements {
+            if element.bar {
+                let (rx, ry, rw, rh) = Self::transform_1d_bar(
+                    orientation,
+                    x,
+                    y,
+                    cursor as i32,
+                    0,
+                    element.width,
+                    bh,
+                    bw,
+                    bh,
+                );
                 let px = self.d2pt(rx as f64);
                 let py = self.height_pt - self.d2pt(ry as f64 + rh as f64);
                 let pw = self.d2pt(rw as f64);
                 let ph = self.d2pt(rh as f64);
                 self.emit_nums(&[px, py, pw, ph], "re");
             }
+            cursor += element.width;
         }
         if reverse_print {
             // Use the bars as a clip and invert the backdrop inside them.
@@ -688,8 +761,90 @@ impl PdfNativeBackend {
                 y,
                 full_w,
                 full_h,
-                mw,
+                module_width,
                 data,
+                interpretation_line_above,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    /// Emits a POSTNET symbol.
+    ///
+    /// POSTNET encodes data in bar *height* rather than bar width, so it needs
+    /// its own painter: all bars share the module width on a fixed pitch, and a
+    /// binary 0 is a bottom-aligned half-height bar.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_postnet(
+        &mut self,
+        x: u32,
+        y: u32,
+        orientation: char,
+        height: u32,
+        module_width: u32,
+        data: &str,
+        reverse_print: bool,
+        interpretation_line: char,
+        interpretation_line_above: char,
+    ) -> ZplResult<()> {
+        let bars = symbology::postnet_bars(data);
+        let (bar_w, gap) = symbology::postnet_pitch(module_width);
+        let pitch = bar_w + gap;
+        let short_h = ((height as f32) * symbology::POSTNET_SHORT_RATIO).round() as u32;
+        let full_w = bars.len() as u32 * bar_w + bars.len().saturating_sub(1) as u32 * gap;
+        let (span_w, span_h) = match orientation {
+            'R' | 'B' => (height, full_w),
+            _ => (full_w, height),
+        };
+
+        self.save_state();
+        if !reverse_print {
+            self.set_fill_color(0.0, 0.0, 0.0);
+        }
+        for (i, bar) in bars.iter().enumerate() {
+            let h = match bar {
+                symbology::BarHeight::Full => height,
+                symbology::BarHeight::Half => short_h,
+            };
+            // Short bars are bottom-aligned with the full-height bars.
+            let top = height.saturating_sub(h);
+            let (rx, ry, rw, rh) = Self::transform_1d_bar(
+                orientation,
+                x,
+                y,
+                (i as u32 * pitch) as i32,
+                top as i32,
+                bar_w,
+                h,
+                full_w,
+                height,
+            );
+            let px = self.d2pt(rx as f64);
+            let py = self.height_pt - self.d2pt(ry as f64 + rh as f64);
+            self.emit_nums(
+                &[px, py, self.d2pt(rw as f64), self.d2pt(rh as f64)],
+                "re",
+            );
+        }
+        if reverse_print {
+            self.emit_op("W");
+            self.emit_op("n");
+            self.fill_inverse_backdrop(x as f64, y as f64, span_w as f64, span_h as f64);
+        } else {
+            self.emit_op("f");
+        }
+        self.restore_state();
+
+        if interpretation_line == 'Y' {
+            let digits: String = data.chars().filter(|c| c.is_ascii_digit()).collect();
+            self.draw_interpretation_line(
+                x,
+                y,
+                span_w,
+                span_h,
+                module_width,
+                &digits,
                 interpretation_line_above,
             )?;
         }
@@ -709,15 +864,15 @@ impl PdfNativeBackend {
         interpretation_line_above: char,
     ) -> ZplResult<()> {
         {
-            let font_char = '0';
-            let (text_h, gap) = crate::engine::font::interpretation_metrics(module_width);
+            let (font_char, text_h, text_w, gap) =
+                crate::engine::font::interpretation_metrics(module_width);
             let text_y = if interpretation_line_above == 'Y' {
                 y.saturating_sub(text_h + gap)
             } else {
                 y + full_h + gap
             };
 
-            let text_width = self.get_text_width(data, font_char, Some(text_h), None);
+            let text_width = self.get_text_width(data, font_char, Some(text_h), Some(text_w));
             let text_x = if full_w > text_width {
                 x + (full_w - text_width) / 2
             } else {
@@ -729,7 +884,7 @@ impl PdfNativeBackend {
                 text_y,
                 font_char,
                 Some(text_h),
-                None,
+                Some(text_w),
                 'N',
                 data,
                 false,
@@ -1226,24 +1381,14 @@ impl ZplForgeBackend for PdfNativeBackend {
         data: &str,
         reverse_print: bool,
     ) -> ZplResult<()> {
-        let (clean_data, hint_val) = if let Some(stripped) = data.strip_prefix(">:") {
-            (stripped, Some("B"))
-        } else if let Some(stripped) = data.strip_prefix(">;") {
-            (stripped, Some("C"))
-        } else if let Some(stripped) = data.strip_prefix(">9") {
-            (stripped, Some("A"))
-        } else {
-            (data, Some("B")) // Standard default is Code Set B
-        };
+        let (clean_data, code_set) = super::code128_code_set(data);
 
-        let hints = hint_val.map(|v| {
-            let mut h = HashMap::new();
-            h.insert(
-                EncodeHintType::FORCE_CODE_SET,
-                EncodeHintValue::ForceCodeSet(v.to_string()),
-            );
-            EncodeHints::from(h)
-        });
+        let mut h = HashMap::new();
+        h.insert(
+            EncodeHintType::FORCE_CODE_SET,
+            EncodeHintValue::ForceCodeSet(code_set.to_string()),
+        );
+        let hints = Some(EncodeHints::from(h));
 
         self.draw_1d_barcode(
             x,
@@ -1251,13 +1396,15 @@ impl ZplForgeBackend for PdfNativeBackend {
             orientation,
             height,
             module_width,
+            // Code 128 is a four-width symbology; ^BY's ratio does not apply.
+            0.0,
             clean_data,
             BarcodeFormat::CODE_128,
             reverse_print,
             interpretation_line,
             interpretation_line_above,
             hints,
-            hint_val.unwrap_or(""),
+            code_set,
         )
     }
 
@@ -1275,9 +1422,9 @@ impl ZplForgeBackend for PdfNativeBackend {
         data: &str,
         reverse_print: bool,
     ) -> ZplResult<()> {
-        let level = match error_correction {
+        let (ec, payload) = super::qr_field_data(data, error_correction);
+        let level = match ec {
             'L' => "L",
-            'M' => "M",
             'Q' => "Q",
             'H' => "H",
             _ => "M",
@@ -1288,15 +1435,11 @@ impl ZplForgeBackend for PdfNativeBackend {
             EncodeHintType::ERROR_CORRECTION,
             EncodeHintValue::ErrorCorrection(level.to_string()),
         );
-        hints.insert(
-            EncodeHintType::MARGIN,
-            EncodeHintValue::Margin("0".to_owned()),
-        );
         let hints: EncodeHints = hints.into();
 
         let bit_matrix = barcode_cache::encode_cached(
             BarcodeFormat::QR_CODE,
-            data,
+            payload,
             &format!("ec:{}", level),
             Some(&hints),
         )?;
@@ -1317,7 +1460,15 @@ impl ZplForgeBackend for PdfNativeBackend {
         data: &str,
         reverse_print: bool,
     ) -> ZplResult<()> {
-        let bit_matrix = barcode_cache::encode_cached(BarcodeFormat::DATA_MATRIX, data, "", None)?;
+        // Match Zebra's square default rather than rxing's smallest-fit
+        // rectangle. See the PNG backend for the measured module counts.
+        let hints = EncodeHints {
+            DataMatrixShape: Some(SymbolShapeHint::FORCE_SQUARE),
+            ..Default::default()
+        };
+
+        let bit_matrix =
+            barcode_cache::encode_cached(BarcodeFormat::DATA_MATRIX, data, "sq", Some(&hints))?;
 
         let m = max(module_size, 1);
         self.fill_matrix_cells(x, y, orientation, m, m, &bit_matrix, reverse_print);
@@ -1361,6 +1512,37 @@ impl ZplForgeBackend for PdfNativeBackend {
         Ok(())
     }
 
+    fn draw_micropdf417(
+        &mut self,
+        x: u32,
+        y: u32,
+        orientation: char,
+        height: u32,
+        _mode: u32,
+        data: &str,
+        reverse_print: bool,
+    ) -> ZplResult<()> {
+        let bit_matrix = barcode_cache::encode_cached(BarcodeFormat::PDF_417, data, "", None)?;
+        let ch = max(height, 1);
+        self.fill_matrix_cells(x, y, orientation, 1, ch, &bit_matrix, reverse_print);
+        Ok(())
+    }
+
+    fn draw_aztec_code(
+        &mut self,
+        x: u32,
+        y: u32,
+        orientation: char,
+        magnification: u32,
+        data: &str,
+        reverse_print: bool,
+    ) -> ZplResult<()> {
+        let bit_matrix = barcode_cache::encode_cached(BarcodeFormat::AZTEC, data, "", None)?;
+        let m = max(magnification, 1);
+        self.fill_matrix_cells(x, y, orientation, m, m, &bit_matrix, reverse_print);
+        Ok(())
+    }
+
     // ── Code 39 barcode ────────────────────────────────────────────
 
     fn draw_code39(
@@ -1371,6 +1553,7 @@ impl ZplForgeBackend for PdfNativeBackend {
         _check_digit: char,
         height: u32,
         module_width: u32,
+        ratio: f32,
         interpretation_line: char,
         interpretation_line_above: char,
         data: &str,
@@ -1382,6 +1565,7 @@ impl ZplForgeBackend for PdfNativeBackend {
             orientation,
             height,
             module_width,
+            ratio,
             data,
             BarcodeFormat::CODE_39,
             reverse_print,
@@ -1402,17 +1586,55 @@ impl ZplForgeBackend for PdfNativeBackend {
         orientation: char,
         height: u32,
         module_width: u32,
+        ratio: f32,
+        check_digit: char,
         interpretation_line: char,
         interpretation_line_above: char,
         data: &str,
         reverse_print: bool,
     ) -> ZplResult<()> {
+        // MSI and POSTNET have no rxing writer; both are encoded natively.
+        match kind {
+            Barcode1DKind::Msi => {
+                let check = symbology::MsiCheck::from_zpl(check_digit);
+                let elements = symbology::msi_elements(data, check, module_width, ratio);
+                let text = symbology::msi_text(data, check);
+                return self.draw_elements(
+                    x,
+                    y,
+                    orientation,
+                    height,
+                    module_width,
+                    &elements,
+                    reverse_print,
+                    interpretation_line,
+                    interpretation_line_above,
+                    &text,
+                );
+            }
+            Barcode1DKind::Postnet => {
+                return self.draw_postnet(
+                    x,
+                    y,
+                    orientation,
+                    height,
+                    module_width,
+                    data,
+                    reverse_print,
+                    interpretation_line,
+                    interpretation_line_above,
+                );
+            }
+            _ => {}
+        }
+
         self.draw_1d_barcode(
             x,
             y,
             orientation,
             height,
             module_width,
+            ratio,
             data,
             barcode_1d_format(kind),
             reverse_print,

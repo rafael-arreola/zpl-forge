@@ -3,12 +3,26 @@
 pub enum Barcode1DKind {
     /// `^BE` — EAN-13 (retail).
     Ean13,
+    /// `^B8` — EAN-8 (short retail).
+    Ean8,
     /// `^BU` — UPC-A (retail).
     UpcA,
+    /// `^B9` — UPC-E (zero-suppressed retail).
+    UpcE,
     /// `^B2` — Interleaved 2 of 5 (cartons, ITF-14).
     Interleaved2of5,
     /// `^BA` — Code 93.
     Code93,
+    /// `^BB` — Codabar.
+    Codabar,
+    /// `^BM` — MSI / Modified Plessey.
+    Msi,
+    /// `^BZ` — POSTNET.
+    Postnet,
+    /// `^BR` — GS1 DataBar / RSS.
+    GS1DataBar,
+    /// `^BS` — UPC/EAN 2 and 5 digit supplemental extensions.
+    Extension25,
 }
 
 /// Represents text justification options in ZPL.

@@ -21,18 +21,20 @@ Check out the [**Visual Documentation (EXAMPLES.md)**](https://github.com/rafael
 
 ZPL-Forge is engineered to deliver enterprise-grade performance and ultra-low latency, making it perfect for both instant single-label previews and high-throughput bulk generation.
 
-**Single Label Render Times (Measured in release mode using the embedded 130 KB TeX Gyre Heros Cn font):**
+> **Benchmark Environment Note:** All performance figures below were measured locally on a **Mac Studio (Apple M1 Max, macOS)** in Cargo release mode (`cargo run --release --example zpl_showcase`).
+
+**Single Label Render Times (Measured in release mode using the embedded TeX Gyre Heros Cn font):**
 
 - **Routing/Dispatch Label (`test_02`):**
   - PNG Output (`PngBackend`): **0.68 ms**
   - Native PDF Output (`PdfNativeBackend`): **2.18 ms**
-- **Standard Shipping Label (`test_01`):**
-  - PNG Output (`PngBackend`): **5.37 ms**
-  - Native PDF Output (`PdfNativeBackend`): **4.83 ms**
+- **Standard Shipping Label (`showcase_01`):**
+  - PNG Output (`PngBackend`): **4.23 ms**
+  - Native PDF Output (`PdfNativeBackend`): **4.88 ms**
 
-**Massive Bulk Batching (Measured in release mode):**
+**Massive Bulk Batching (Measured locally in release mode):**
 
-- **Native Vector PDF (1,000 Combined Labels via `render_pages`):** **69.74 ms** total time (**0.07 ms / page**), producing a compact, searchable file of only **0.86 MB** (a throughput of over **14,300 pages per second**!).
+- **Native Vector PDF (1,000 High-Density ZPL-FORGE EXPRESS Shipping Labels via `render_pages`):** **161.50 ms** total time (**0.162 ms / page**), producing a compact, searchable file of **1.85 MB** (a throughput of over **6,100 pages per second**!).
 
 ## Installation
 
@@ -312,33 +314,48 @@ To match real printer output, identifiers **`A`–`H`** emulate Zebra's built-in
 
 ## Supported ZPL Commands
 
-| Command | Name             | Parameters    | Description                                                                                                 |
-| :------ | :--------------- | :------------ | :---------------------------------------------------------------------------------------------------------- |
-| `^A`    | Font Spec        | `f,o,h,w`     | Specifies font (A..Z, 0..9), orientation (N, R, I, B — text rotation supported), height, and width in dots. |
-| `^B2`   | Interleaved 2/5  | `o,h,f,g,e`   | Interleaved 2 of 5 Barcode (cartons, ITF-14).                                                               |
-| `^B3`   | Code 39          | `o,e,h,f,g`   | Code 39 Barcode.                                                                                            |
-| `^B7`   | PDF417           | `o,h,s,c,r,t` | PDF417 two-dimensional Barcode.                                                                             |
-| `^BA`   | Code 93          | `o,h,f,g,e`   | Code 93 Barcode.                                                                                            |
-| `^BC`   | Code 128         | `o,h,f,g,e,m` | Code 128 Barcode.                                                                                           |
-| `^BE`   | EAN-13           | `o,h,f,g`     | EAN-13 Barcode (retail).                                                                                    |
-| `^BQ`   | QR Code          | `o,m,s,e,k`   | QR Code (Model 1 or 2).                                                                                     |
-| `^BU`   | UPC-A            | `o,h,f,g,e`   | UPC-A Barcode (retail).                                                                                     |
-| `^BX`   | Data Matrix      | `o,h,s,c,r`   | Data Matrix (ECC 200) two-dimensional Barcode.                                                              |
-| `^BY`   | Barcode Default  | `w,r,h`       | Sets default values for barcodes (module width, ratio, and height).                                         |
-| `^CF`   | Change Def. Font | `f,h,w`       | Changes the default alphanumeric font.                                                                      |
-| `^FB`   | Field Block      | `w,l,s,j,i`   | Wraps text in a block: width, max lines, line spacing, justification (L/C/R), indent. `\&` breaks lines.    |
-| `^FD`   | Field Data       | `d`           | Data to print in the current field.                                                                         |
-| `^FO`   | Field Origin     | `x,y`         | Sets the top-left corner of the field.                                                                      |
-| `^FR`   | Field Reverse    | N/A           | Inverts the field color (white on black).                                                                   |
-| `^FS`   | Field Separator  | N/A           | Indicates the end of a field definition.                                                                    |
-| `^FT`   | Field Typeset    | `x,y`         | Sets field position relative to the text baseline.                                                          |
-| `^GB`   | Graphic Box      | `w,h,t,c,r`   | Draws a box, line, or rectangle with rounded corners.                                                       |
-| `^GC`   | Graphic Circle   | `d,t,c`       | Draws a circle by specifying its diameter.                                                                  |
-| `^GD`   | Graphic Diagonal | `w,h,t,c,o`   | Draws a diagonal line (`/` or `\`).                                                                         |
-| `^GE`   | Graphic Ellipse  | `w,h,t,c`     | Draws an ellipse.                                                                                           |
-| `^GF`   | Graphic Field    | `c,b,f,p,d`   | Renders a bitmap image (supports A/Hex type compression).                                                   |
-| `^XA`   | Start Format     | N/A           | Indicates the start of a label. Multiple `^XA...^XZ` blocks become pages in the native PDF backend.         |
-| `^XZ`   | End Format       | N/A           | Indicates the end of a label.                                                                               |
+| Command | Name | Parameters | Description |
+| :--- | :--- | :--- | :--- |
+| `^A` | Font Spec | `f,o,h,w` | Specifies font (A..Z, 0..9), orientation (N, R, I, B — text rotation supported), height, and width in dots. |
+| `^B0` / `^BO` | Aztec Code | `a,b,c,d,e,f,g` | Aztec Code two-dimensional Barcode. |
+| `^B2` | Interleaved 2/5 | `o,h,f,g,e` | Interleaved 2 of 5 Barcode (cartons, ITF-14). |
+| `^B3` | Code 39 | `o,e,h,f,g` | Code 39 Barcode. |
+| `^B7` | PDF417 | `o,h,s,c,r,t` | PDF417 two-dimensional Barcode. |
+| `^B8` | EAN-8 | `o,h,f,g` | EAN-8 Barcode (retail). |
+| `^B9` | UPC-E | `o,h,f,g,e` | UPC-E Barcode (retail). |
+| `^BA` | Code 93 | `o,h,f,g,e` | Code 93 Barcode. |
+| `^BB` | Codabar | `o,e,h,f,g,k,l` | Codabar Barcode. |
+| `^BC` | Code 128 | `o,h,f,g,e,m` | Code 128 Barcode (subsets A, B, and C). |
+| `^BE` | EAN-13 | `o,h,f,g` | EAN-13 Barcode (retail). |
+| `^BF` | MicroPDF417 | `o,h,m` | MicroPDF417 two-dimensional Barcode. |
+| `^BM` | MSI Barcode | `o,e,h,f,g,m` | MSI Barcode. |
+| `^BQ` | QR Code | `o,m,s,e,k` | QR Code (Model 1 or 2). |
+| `^BR` | GS1 DataBar | `o,t,m,s,h,w` | GS1 DataBar / RSS Barcode. |
+| `^BS` | UPCEAN / Postnet | `o,h,f,g` | UPCEAN extension / Postal Barcode. |
+| `^BU` | UPC-A | `o,h,f,g,e` | UPC-A Barcode (retail). |
+| `^BX` | Data Matrix | `o,h,s,c,r` | Data Matrix (ECC 200) two-dimensional Barcode. |
+| `^BY` | Barcode Default | `w,r,h` | Sets default values for barcodes (module width, ratio, and height). |
+| `^BZ` | POSTNET | `o,h,f,g` | POSTNET Barcode. |
+| `^CF` | Change Def. Font | `f,h,w` | Changes the default alphanumeric font. |
+| `^CI` | Change Encoding | `a` | Changes international character set or encoding (e.g. `^CI28`). |
+| `^FB` | Field Block | `w,l,s,j,i` | Wraps text in a block: width, max lines, line spacing, justification (L/C/R), indent. `\&` breaks lines. |
+| `^FD` | Field Data | `d` | Data to print in the current field. |
+| `^FH` | Field Hex Escape | `a` | Hexadecimal field data escape indicator (e.g. `^FH_`). |
+| `^FO` | Field Origin | `x,y` | Sets the top-left corner of the field. |
+| `^FR` | Field Reverse | N/A | Inverts the field color (white on black). |
+| `^FS` | Field Separator | N/A | Indicates the end of a field definition. |
+| `^FT` | Field Typeset | `x,y` | Sets field position relative to the text baseline. |
+| `^FX` | Comment | `c` | Comment / remark (ignored during rendering). |
+| `^GB` | Graphic Box | `w,h,t,c,r` | Draws a box, line, or rectangle with rounded corners. |
+| `^GC` | Graphic Circle | `d,t,c` | Draws a circle by specifying its diameter. |
+| `^GD` | Graphic Diagonal | `w,h,t,c,o` | Draws a diagonal line (`/` or `\`). |
+| `^GE` | Graphic Ellipse | `w,h,t,c` | Draws an ellipse. |
+| `^GF` | Graphic Field | `c,b,f,p,d` | Renders a bitmap image (supports A/Hex type compression). |
+| `^LH` | Label Home | `x,y` | Sets the home position offset for the label. |
+| `^LL` | Label Length | `y` | Defines the physical height/length of the label in dots. |
+| `^LR` | Label Reverse | `a` | Inverts print colors across the whole label. |
+| `^XA` | Start Format | N/A | Indicates the start of a label. Multiple `^XA...^XZ` blocks become pages in the native PDF backend. |
+| `^XZ` | End Format | N/A | Indicates the end of a label. |
 
 ## Custom Commands (Extensions)
 

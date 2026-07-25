@@ -194,6 +194,24 @@ impl ZplEngine {
         Ok(result)
     }
 
+    /// Renders the label directly to native vector PDF bytes using default backend settings.
+    ///
+    /// # Returns
+    /// A `ZplResult<Vec<u8>>` containing the raw PDF document bytes.
+    #[cfg(feature = "pdf")]
+    pub fn to_pdf(&self) -> ZplResult<Vec<u8>> {
+        self.render(crate::forge::pdf_native::PdfNativeBackend::new(), &HashMap::new())
+    }
+
+    /// Renders the label directly to PNG image bytes using default backend settings.
+    ///
+    /// # Returns
+    /// A `ZplResult<Vec<u8>>` containing the raw PNG image bytes.
+    #[cfg(feature = "png")]
+    pub fn to_png(&self) -> ZplResult<Vec<u8>> {
+        self.render(crate::forge::png::PngBackend::new(), &HashMap::new())
+    }
+
     /// Helper method to execute the parsed instructions on the provided backend.
     fn render_instructions<B: backend::ZplForgeBackend>(
         &self,
@@ -263,6 +281,8 @@ impl ZplEngine {
                 common::ZplInstruction::Pdf417 { condition, .. } => condition,
                 common::ZplInstruction::Barcode1D { condition, .. } => condition,
                 common::ZplInstruction::GraphicDiagonal { condition, .. } => condition,
+                common::ZplInstruction::MicroPdf417 { condition, .. } => condition,
+                common::ZplInstruction::AztecCode { condition, .. } => condition,
             };
 
             if let Some((var, expected)) = condition
@@ -489,6 +509,8 @@ impl ZplEngine {
                     orientation,
                     height,
                     module_width,
+                    ratio,
+                    check_digit,
                     interpretation_line,
                     interpretation_line_above,
                     data,
@@ -501,6 +523,8 @@ impl ZplEngine {
                         *orientation,
                         *height,
                         *module_width,
+                        *ratio,
+                        *check_digit,
                         *interpretation_line,
                         *interpretation_line_above,
                         &replace_vars(data, variables),
@@ -579,6 +603,7 @@ impl ZplEngine {
                     check_digit,
                     height,
                     module_width,
+                    ratio,
                     interpretation_line,
                     interpretation_line_above,
                     data,
@@ -591,6 +616,7 @@ impl ZplEngine {
                         *check_digit,
                         *height,
                         *module_width,
+                        *ratio,
                         *interpretation_line,
                         *interpretation_line_above,
                         &replace_vars(data, variables),
@@ -606,6 +632,29 @@ impl ZplEngine {
                     data,
                 } => {
                     backend.draw_graphic_image_custom(*x, *y, *width, *height, data)?;
+                }
+                common::ZplInstruction::MicroPdf417 {
+                    condition: _,
+                    x,
+                    y,
+                    orientation,
+                    height,
+                    mode,
+                    data,
+                    reverse_print: _,
+                } => {
+                    backend.draw_micropdf417(*x, *y, *orientation, *height, *mode, &replace_vars(data, variables), false)?;
+                }
+                common::ZplInstruction::AztecCode {
+                    condition: _,
+                    x,
+                    y,
+                    orientation,
+                    magnification,
+                    data,
+                    reverse_print: _,
+                } => {
+                    backend.draw_aztec_code(*x, *y, *orientation, *magnification, &replace_vars(data, variables), false)?;
                 }
             }
         }
