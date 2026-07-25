@@ -28,11 +28,11 @@ fn unescape_hex(data: &str, indicator: char) -> String {
                     hex_str.push(chars.next().unwrap());
                 }
             }
-            if hex_str.len() == 2 {
-                if let Ok(byte) = u8::from_str_radix(&hex_str, 16) {
-                    result.push(byte as char);
-                    continue;
-                }
+            if hex_str.len() == 2
+                && let Ok(byte) = u8::from_str_radix(&hex_str, 16)
+            {
+                result.push(byte as char);
+                continue;
             }
             result.push(indicator);
             result.push_str(&hex_str);
@@ -109,11 +109,10 @@ impl ZplInstructionBuilder {
                     self.state.hex_escape = indicator;
                 }
 
-                cmd::Command::ChangeIntFont { charset } => {
-                    if let Some(c) = charset {
-                        self.state.charset = c;
-                    }
+                cmd::Command::ChangeIntFont { charset: Some(c) } => {
+                    self.state.charset = c;
                 }
+                cmd::Command::ChangeIntFont { charset: None } => {}
 
                 cmd::Command::FontSpec {
                     font_name,
@@ -415,7 +414,11 @@ impl ZplInstructionBuilder {
                     self.state.instruction_type = Some(state::ZplInstructionType::QRCode);
                 }
 
-                cmd::Command::MicroPdf417 { orientation, height, mode } => {
+                cmd::Command::MicroPdf417 {
+                    orientation,
+                    height,
+                    mode,
+                } => {
                     self.state.attributes.orientation = orientation;
                     self.state.metrics.height = height.unwrap_or(10);
                     self.state.params.model = mode.unwrap_or(0);
@@ -446,7 +449,9 @@ impl ZplInstructionBuilder {
                 } => {
                     self.state.attributes.orientation = orientation;
                     self.state.metrics.height = height.unwrap_or(25);
-                    self.state.instruction_type = Some(state::ZplInstructionType::Barcode1D(common::Barcode1DKind::GS1DataBar));
+                    self.state.instruction_type = Some(state::ZplInstructionType::Barcode1D(
+                        common::Barcode1DKind::GS1DataBar,
+                    ));
                 }
 
                 cmd::Command::CustomImage {
@@ -468,7 +473,10 @@ impl ZplInstructionBuilder {
                 cmd::Command::FieldSeparator => {
                     let (x, y) = if self.state.is_typeset {
                         let font_h = self.state.font.height.unwrap_or(30);
-                        (self.state.typeset.x, self.state.typeset.y.saturating_sub(font_h))
+                        (
+                            self.state.typeset.x,
+                            self.state.typeset.y.saturating_sub(font_h),
+                        )
                     } else {
                         (self.state.position.x, self.state.position.y)
                     };
@@ -585,7 +593,8 @@ impl ZplInstructionBuilder {
                                     } else {
                                         2
                                     },
-                                    ratio: self.state.params.ratio.unwrap_or(DEFAULT_BAR_RATIO) as f32,
+                                    ratio: self.state.params.ratio.unwrap_or(DEFAULT_BAR_RATIO)
+                                        as f32,
                                     interpretation_line: self
                                         .state
                                         .attributes
@@ -613,7 +622,8 @@ impl ZplInstructionBuilder {
                                     } else {
                                         2
                                     },
-                                    ratio: self.state.params.ratio.unwrap_or(DEFAULT_BAR_RATIO) as f32,
+                                    ratio: self.state.params.ratio.unwrap_or(DEFAULT_BAR_RATIO)
+                                        as f32,
                                     check_digit: self.state.attributes.check_digit.unwrap_or('B'),
                                     interpretation_line: self
                                         .state

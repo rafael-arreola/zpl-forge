@@ -161,12 +161,19 @@ fn main() {
     println!("Rendering {} test cases to PNG and PDF...", cases.len());
 
     for case in &cases {
-        let engine = ZplEngine::new(case.zpl, Unit::Inches(case.w), Unit::Inches(case.h), Resolution::Dpi203)
-            .unwrap_or_else(|e| panic!("Engine creation failed for {}: {:?}", case.name, e));
+        let engine = ZplEngine::new(
+            case.zpl,
+            Unit::Inches(case.w),
+            Unit::Inches(case.h),
+            Resolution::Dpi203,
+        )
+        .unwrap_or_else(|e| panic!("Engine creation failed for {}: {:?}", case.name, e));
 
-        let png_bytes = engine.render(PngBackend::new(), &HashMap::new())
+        let png_bytes = engine
+            .render(PngBackend::new(), &HashMap::new())
             .unwrap_or_else(|e| panic!("PNG render failed for {}: {:?}", case.name, e));
-        let pdf_bytes = engine.render(PdfNativeBackend::new(), &HashMap::new())
+        let pdf_bytes = engine
+            .render(PdfNativeBackend::new(), &HashMap::new())
             .unwrap_or_else(|e| panic!("PDF render failed for {}: {:?}", case.name, e));
 
         let png_path = format!("examples/{}.png", case.name);
@@ -187,7 +194,9 @@ fn main() {
             println!("Check 3-panel composite output images in 'output_comparisons/' directory.");
         }
         _ => {
-            println!("\n[NOTE] Python comparison script finished. Running single comparison as fallback...");
+            println!(
+                "\n[NOTE] Python comparison script finished. Running single comparison as fallback..."
+            );
             let _ = Command::new("python3")
                 .arg("tools/compare_labelary.py")
                 .status();

@@ -377,25 +377,25 @@ pub fn render_05_multi_page_batch() {
         ^XZ
     "#;
 
-    let names = vec![
+    let names = [
         "JUAN PEREZ LOPEZ",
         "MARIA GARCIA MARTINEZ",
         "CARLOS RODRIGUEZ",
         "ANA HERNANDEZ",
     ];
-    let companies = vec![
+    let companies = [
         "TECH SOLUTIONS CORP",
         "GLOBAL IMPORTS S.A.",
         "INNOVATION LABS",
         "LOGISTICA GLOBAL",
     ];
-    let addresses = vec![
+    let addresses = [
         "AV REFORMA 500 PISO 10",
         "CALLE OBRERA 120 BODEGA 4",
         "INSURGENTES SUR 1450",
         "AV JUAREZ 88 STE 200",
     ];
-    let cities_hubs = vec![
+    let cities_hubs = [
         ("MEXICO CITY DF 06600", "MEX", "+52 55 5555 0100", "06600"),
         ("GUADALAJARA JAL 44100", "GDL", "+52 33 3333 0200", "44100"),
         ("MONTERREY NL 64000", "MTY", "+52 81 8181 0300", "64000"),

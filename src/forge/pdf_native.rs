@@ -652,7 +652,10 @@ impl PdfNativeBackend {
             | BarcodeFormat::UPC_A
             | BarcodeFormat::UPC_E
             | BarcodeFormat::ITF => {
-                numeric_data = data.chars().filter(|c| c.is_ascii_digit()).collect::<String>();
+                numeric_data = data
+                    .chars()
+                    .filter(|c| c.is_ascii_digit())
+                    .collect::<String>();
                 &numeric_data
             }
             _ => data,
@@ -822,10 +825,7 @@ impl PdfNativeBackend {
             );
             let px = self.d2pt(rx as f64);
             let py = self.height_pt - self.d2pt(ry as f64 + rh as f64);
-            self.emit_nums(
-                &[px, py, self.d2pt(rw as f64), self.d2pt(rh as f64)],
-                "re",
-            );
+            self.emit_nums(&[px, py, self.d2pt(rw as f64), self.d2pt(rh as f64)], "re");
         }
         if reverse_print {
             self.emit_op("W");

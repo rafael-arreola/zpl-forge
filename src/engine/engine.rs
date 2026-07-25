@@ -200,7 +200,10 @@ impl ZplEngine {
     /// A `ZplResult<Vec<u8>>` containing the raw PDF document bytes.
     #[cfg(feature = "pdf")]
     pub fn to_pdf(&self) -> ZplResult<Vec<u8>> {
-        self.render(crate::forge::pdf_native::PdfNativeBackend::new(), &HashMap::new())
+        self.render(
+            crate::forge::pdf_native::PdfNativeBackend::new(),
+            &HashMap::new(),
+        )
     }
 
     /// Renders the label directly to PNG image bytes using default backend settings.
@@ -643,7 +646,15 @@ impl ZplEngine {
                     data,
                     reverse_print: _,
                 } => {
-                    backend.draw_micropdf417(*x, *y, *orientation, *height, *mode, &replace_vars(data, variables), false)?;
+                    backend.draw_micropdf417(
+                        *x,
+                        *y,
+                        *orientation,
+                        *height,
+                        *mode,
+                        &replace_vars(data, variables),
+                        false,
+                    )?;
                 }
                 common::ZplInstruction::AztecCode {
                     condition: _,
@@ -654,7 +665,14 @@ impl ZplEngine {
                     data,
                     reverse_print: _,
                 } => {
-                    backend.draw_aztec_code(*x, *y, *orientation, *magnification, &replace_vars(data, variables), false)?;
+                    backend.draw_aztec_code(
+                        *x,
+                        *y,
+                        *orientation,
+                        *magnification,
+                        &replace_vars(data, variables),
+                        false,
+                    )?;
                 }
             }
         }

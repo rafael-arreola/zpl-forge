@@ -331,7 +331,6 @@ pub enum Command {
         truncate: Option<YesNo>,
     },
 
-
     /// ^BF - MicroPDF417 Barcode
     MicroPdf417 {
         /// Orientation (N, R, I, B)

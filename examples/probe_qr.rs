@@ -35,13 +35,16 @@ fn main() {
                 QrMaskPattern: Some(mask.to_string()),
                 ..Default::default()
             };
-            match MultiFormatWriter.encode_with_hints(payload, &BarcodeFormat::QR_CODE, 0, 0, &hints)
-            {
+            match MultiFormatWriter.encode_with_hints(
+                payload,
+                &BarcodeFormat::QR_CODE,
+                0,
+                0,
+                &hints,
+            ) {
                 Ok(m) => {
-                    let _ = std::fs::write(
-                        format!("{prefix}.mask{mask}"),
-                        matrix_rows(&m).join("\n"),
-                    );
+                    let _ =
+                        std::fs::write(format!("{prefix}.mask{mask}"), matrix_rows(&m).join("\n"));
                 }
                 Err(e) => println!("{payload}/{ec}/mask{mask}: ERROR {e}"),
             }

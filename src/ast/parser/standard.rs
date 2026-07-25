@@ -5,7 +5,9 @@ use nom::{
     combinator::{cut, map, opt},
 };
 
-use super::{Res, Span, opt_param, param, parse_char, parse_char_upper, parse_f32, parse_u32, parse_xy};
+use super::{
+    Res, Span, opt_param, param, parse_char, parse_char_upper, parse_f32, parse_u32, parse_xy,
+};
 use crate::ast::cmd;
 use crate::ast::commons::{Barcode1DKind, Justification, YesNo};
 
@@ -499,9 +501,15 @@ pub fn cmd_b8(input: Span) -> Res<cmd::Command> {
     let (input, _) = tag("^B8").parse(input)?;
     let (rest, args) = cut(take_till(|c| c == '^')).parse(input)?;
     let (args_input, orientation) = opt_param(parse_char_upper).parse(args)?;
-    let (args_input, height) = param(parse_u32).parse(args_input).unwrap_or((args_input, None));
-    let (args_input, interpretation_line) = param(parse_char_upper).parse(args_input).unwrap_or((args_input, None));
-    let (_, interpretation_line_above) = param(parse_char_upper).parse(args_input).unwrap_or((args_input, None));
+    let (args_input, height) = param(parse_u32)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
+    let (args_input, interpretation_line) = param(parse_char_upper)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
+    let (_, interpretation_line_above) = param(parse_char_upper)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
 
     Ok((
         rest,
@@ -521,10 +529,18 @@ pub fn cmd_b9(input: Span) -> Res<cmd::Command> {
     let (input, _) = tag("^B9").parse(input)?;
     let (rest, args) = cut(take_till(|c| c == '^')).parse(input)?;
     let (args_input, orientation) = opt_param(parse_char_upper).parse(args)?;
-    let (args_input, height) = param(parse_u32).parse(args_input).unwrap_or((args_input, None));
-    let (args_input, interpretation_line) = param(parse_char_upper).parse(args_input).unwrap_or((args_input, None));
-    let (args_input, interpretation_line_above) = param(parse_char_upper).parse(args_input).unwrap_or((args_input, None));
-    let (_, check_digit) = param(parse_char_upper).parse(args_input).unwrap_or((args_input, None));
+    let (args_input, height) = param(parse_u32)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
+    let (args_input, interpretation_line) = param(parse_char_upper)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
+    let (args_input, interpretation_line_above) = param(parse_char_upper)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
+    let (_, check_digit) = param(parse_char_upper)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
 
     Ok((
         rest,
@@ -544,10 +560,18 @@ pub fn cmd_bb(input: Span) -> Res<cmd::Command> {
     let (input, _) = tag("^BB").parse(input)?;
     let (rest, args) = cut(take_till(|c| c == '^')).parse(input)?;
     let (args_input, orientation) = opt_param(parse_char_upper).parse(args)?;
-    let (args_input, height) = param(parse_u32).parse(args_input).unwrap_or((args_input, None));
-    let (args_input, interpretation_line) = param(parse_char_upper).parse(args_input).unwrap_or((args_input, None));
-    let (args_input, interpretation_line_above) = param(parse_char_upper).parse(args_input).unwrap_or((args_input, None));
-    let (_, check_digit) = param(parse_char_upper).parse(args_input).unwrap_or((args_input, None));
+    let (args_input, height) = param(parse_u32)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
+    let (args_input, interpretation_line) = param(parse_char_upper)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
+    let (args_input, interpretation_line_above) = param(parse_char_upper)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
+    let (_, check_digit) = param(parse_char_upper)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
 
     Ok((
         rest,
@@ -567,10 +591,18 @@ pub fn cmd_bm(input: Span) -> Res<cmd::Command> {
     let (input, _) = tag("^BM").parse(input)?;
     let (rest, args) = cut(take_till(|c| c == '^')).parse(input)?;
     let (args_input, orientation) = opt_param(parse_char_upper).parse(args)?;
-    let (args_input, check_digit) = param(parse_char_upper).parse(args_input).unwrap_or((args_input, None));
-    let (args_input, height) = param(parse_u32).parse(args_input).unwrap_or((args_input, None));
-    let (args_input, interpretation_line) = param(parse_char_upper).parse(args_input).unwrap_or((args_input, None));
-    let (_, interpretation_line_above) = param(parse_char_upper).parse(args_input).unwrap_or((args_input, None));
+    let (args_input, check_digit) = param(parse_char_upper)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
+    let (args_input, height) = param(parse_u32)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
+    let (args_input, interpretation_line) = param(parse_char_upper)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
+    let (_, interpretation_line_above) = param(parse_char_upper)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
 
     Ok((
         rest,
@@ -590,9 +622,15 @@ pub fn cmd_bz(input: Span) -> Res<cmd::Command> {
     let (input, _) = tag("^BZ").parse(input)?;
     let (rest, args) = cut(take_till(|c| c == '^')).parse(input)?;
     let (args_input, orientation) = opt_param(parse_char_upper).parse(args)?;
-    let (args_input, height) = param(parse_u32).parse(args_input).unwrap_or((args_input, None));
-    let (args_input, interpretation_line) = param(parse_char_upper).parse(args_input).unwrap_or((args_input, None));
-    let (_, interpretation_line_above) = param(parse_char_upper).parse(args_input).unwrap_or((args_input, None));
+    let (args_input, height) = param(parse_u32)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
+    let (args_input, interpretation_line) = param(parse_char_upper)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
+    let (_, interpretation_line_above) = param(parse_char_upper)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
 
     Ok((
         rest,
@@ -612,9 +650,15 @@ pub fn cmd_bs(input: Span) -> Res<cmd::Command> {
     let (input, _) = tag("^BS").parse(input)?;
     let (rest, args) = cut(take_till(|c| c == '^')).parse(input)?;
     let (args_input, orientation) = opt_param(parse_char_upper).parse(args)?;
-    let (args_input, height) = param(parse_u32).parse(args_input).unwrap_or((args_input, None));
-    let (args_input, interpretation_line) = param(parse_char_upper).parse(args_input).unwrap_or((args_input, None));
-    let (_, interpretation_line_above) = param(parse_char_upper).parse(args_input).unwrap_or((args_input, None));
+    let (args_input, height) = param(parse_u32)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
+    let (args_input, interpretation_line) = param(parse_char_upper)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
+    let (_, interpretation_line_above) = param(parse_char_upper)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
 
     Ok((
         rest,
@@ -629,23 +673,28 @@ pub fn cmd_bs(input: Span) -> Res<cmd::Command> {
     ))
 }
 
-
 /// ^B0 / ^BO - Aztec Code Barcode (`^B0a,b,c,d,e,f,g`)
 pub fn cmd_b0(input: Span) -> Res<cmd::Command> {
     let (input, _) = alt((tag("^B0"), tag("^BO"))).parse(input)?;
     let (rest, args) = cut(take_till(|c| c == '^')).parse(input)?;
     let (args_input, orientation) = opt_param(parse_char_upper).parse(args)?;
-    let (args_input, magnification) = param(parse_u32).parse(args_input).unwrap_or((args_input, None));
+    let (args_input, magnification) = param(parse_u32)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
     let (args_input, extended_channel) = param(parse_char_upper)
         .parse(args_input)
         .map(|(i, c)| (i, c.map(|ch| ch == 'Y')))
         .unwrap_or((args_input, None));
-    let (args_input, ecc_percent) = param(parse_u32).parse(args_input).unwrap_or((args_input, None));
+    let (args_input, ecc_percent) = param(parse_u32)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
     let (args_input, menu_symbol) = param(parse_char_upper)
         .parse(args_input)
         .map(|(i, c)| (i, c.map(|ch| ch == 'Y')))
         .unwrap_or((args_input, None));
-    let (args_input, symbols_count) = param(parse_u32).parse(args_input).unwrap_or((args_input, None));
+    let (args_input, symbols_count) = param(parse_u32)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
     let (_, id_field) = param(take_till(|c| c == ',' || c == '^'))
         .parse(args_input)
         .map(|(i, s)| (i, s.map(|val| val.to_string())))
@@ -670,8 +719,12 @@ pub fn cmd_bf(input: Span) -> Res<cmd::Command> {
     let (input, _) = tag("^BF").parse(input)?;
     let (rest, args) = cut(take_till(|c| c == '^')).parse(input)?;
     let (args_input, orientation) = opt_param(parse_char_upper).parse(args)?;
-    let (args_input, height) = param(parse_u32).parse(args_input).unwrap_or((args_input, None));
-    let (_, mode) = param(parse_u32).parse(args_input).unwrap_or((args_input, None));
+    let (args_input, height) = param(parse_u32)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
+    let (_, mode) = param(parse_u32)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
 
     Ok((
         rest,
@@ -688,11 +741,21 @@ pub fn cmd_br(input: Span) -> Res<cmd::Command> {
     let (input, _) = tag("^BR").parse(input)?;
     let (rest, args) = cut(take_till(|c| c == '^')).parse(input)?;
     let (args_input, orientation) = opt_param(parse_char_upper).parse(args)?;
-    let (args_input, symbology_type) = param(parse_u32).parse(args_input).unwrap_or((args_input, None));
-    let (args_input, magnification) = param(parse_u32).parse(args_input).unwrap_or((args_input, None));
-    let (args_input, separator_height) = param(parse_u32).parse(args_input).unwrap_or((args_input, None));
-    let (args_input, height) = param(parse_u32).parse(args_input).unwrap_or((args_input, None));
-    let (_, segment_width) = param(parse_u32).parse(args_input).unwrap_or((args_input, None));
+    let (args_input, symbology_type) = param(parse_u32)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
+    let (args_input, magnification) = param(parse_u32)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
+    let (args_input, separator_height) = param(parse_u32)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
+    let (args_input, height) = param(parse_u32)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
+    let (_, segment_width) = param(parse_u32)
+        .parse(args_input)
+        .unwrap_or((args_input, None));
 
     Ok((
         rest,
@@ -725,4 +788,3 @@ pub fn cmd_ci(input: Span) -> Res<cmd::Command> {
     let (input, charset) = cut(opt_param(parse_u32)).parse(input)?;
     Ok((input, cmd::Command::ChangeIntFont { charset }))
 }
-

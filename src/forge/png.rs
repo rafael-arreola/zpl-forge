@@ -903,7 +903,10 @@ impl PngBackend {
             | BarcodeFormat::UPC_A
             | BarcodeFormat::UPC_E
             | BarcodeFormat::ITF => {
-                numeric_data = data.chars().filter(|c| c.is_ascii_digit()).collect::<String>();
+                numeric_data = data
+                    .chars()
+                    .filter(|c| c.is_ascii_digit())
+                    .collect::<String>();
                 &numeric_data
             }
             _ => data,

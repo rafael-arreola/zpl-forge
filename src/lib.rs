@@ -74,7 +74,12 @@ pub(crate) const TARGET: &str = "zpl-forge";
 /// Returns [`ZplError::ParseError`] if the ZPL string contains malformed syntax, or [`ZplError::EmptyInput`] if input is empty.
 #[cfg(feature = "pdf")]
 pub fn render_pdf(zpl: &str) -> ZplResult<Vec<u8>> {
-    let engine = ZplEngine::new(zpl, Unit::Inches(4.0), Unit::Inches(6.0), Resolution::Dpi203)?;
+    let engine = ZplEngine::new(
+        zpl,
+        Unit::Inches(4.0),
+        Unit::Inches(6.0),
+        Resolution::Dpi203,
+    )?;
     engine.to_pdf()
 }
 
@@ -90,6 +95,11 @@ pub fn render_pdf(zpl: &str) -> ZplResult<Vec<u8>> {
 /// Returns [`ZplError::ParseError`] if the ZPL string contains malformed syntax, or [`ZplError::EmptyInput`] if input is empty.
 #[cfg(feature = "png")]
 pub fn render_png(zpl: &str) -> ZplResult<Vec<u8>> {
-    let engine = ZplEngine::new(zpl, Unit::Inches(4.0), Unit::Inches(6.0), Resolution::Dpi203)?;
+    let engine = ZplEngine::new(
+        zpl,
+        Unit::Inches(4.0),
+        Unit::Inches(6.0),
+        Resolution::Dpi203,
+    )?;
     engine.to_png()
 }

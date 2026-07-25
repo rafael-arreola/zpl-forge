@@ -26,7 +26,16 @@ fn main() {
     let mut best: Option<(usize, String)> = None;
 
     for payload in payloads {
-        for ec in [None, Some(0u32), Some(5), Some(10), Some(23), Some(25), Some(33), Some(50)] {
+        for ec in [
+            None,
+            Some(0u32),
+            Some(5),
+            Some(10),
+            Some(23),
+            Some(25),
+            Some(33),
+            Some(50),
+        ] {
             for layers in [None, Some(1i32), Some(2), Some(3), Some(4)] {
                 let hints = EncodeHints {
                     ErrorCorrection: ec.map(|v| v.to_string()),

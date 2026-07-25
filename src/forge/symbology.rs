@@ -258,7 +258,11 @@ pub(crate) fn matrix_elements(
     let mut run_start = 0u32;
     let mut current = matrix.get(0, 0);
     for x in 1..=width {
-        let value = if x < width { matrix.get(x, 0) } else { !current };
+        let value = if x < width {
+            matrix.get(x, 0)
+        } else {
+            !current
+        };
         if value != current {
             let modules = x - run_start;
             let dots = match ratio {
