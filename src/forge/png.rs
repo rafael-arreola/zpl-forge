@@ -8,7 +8,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use ab_glyph::{Font, ScaleFont};
-use base64::{Engine as _, engine::general_purpose};
 use image::{
     ImageBuffer, Rgb, RgbImage, Rgba, RgbaImage,
     imageops::{overlay, rotate90, rotate180, rotate270},
@@ -85,10 +84,12 @@ impl PngBackend {
     /// Inverts the colors within a specified rectangular area.
     fn invert_rect(&mut self, rect: Rect) {
         let (cw, ch) = self.canvas.dimensions();
-        let x_start = rect.left().max(0) as u32;
-        let y_start = rect.top().max(0) as u32;
-        let x_end = (rect.right() as u32).min(cw);
-        let y_end = (rect.bottom() as u32).min(ch);
+        let left = i64::from(rect.left());
+        let top = i64::from(rect.top());
+        let x_start = left.clamp(0, i64::from(cw)) as u32;
+        let y_start = top.clamp(0, i64::from(ch)) as u32;
+        let x_end = (left + i64::from(rect.width())).clamp(0, i64::from(cw)) as u32;
+        let y_end = (top + i64::from(rect.height())).clamp(0, i64::from(ch)) as u32;
 
         for py in y_start..y_end {
             for px in x_start..x_end {
@@ -98,6 +99,29 @@ impl PngBackend {
                 pixel.0[2] ^= 255;
             }
         }
+    }
+
+    fn validate_draw_bounds(x: u32, y: u32, width: u32, height: u32) -> ZplResult<()> {
+        super::validate_raster_dimensions(width, height)?;
+        let right = i64::from(x) + i64::from(width);
+        let bottom = i64::from(y) + i64::from(height);
+        if right > i64::from(i32::MAX) || bottom > i64::from(i32::MAX) {
+            return Err(ZplError::BackendError(format!(
+                "Drawing bounds exceed supported coordinates: ({x}, {y}), {width}x{height}"
+            )));
+        }
+        Ok(())
+    }
+
+    fn validate_barcode_input(height: u32, module_width: u32, data: &str) -> ZplResult<()> {
+        super::validate_raster_dimensions(module_width.max(1), height)?;
+        // Bound native encoding and numeric normalization before they allocate.
+        if data.len() > super::MAX_IMAGE_DIMENSION as usize {
+            return Err(ZplError::BackendError(
+                "Barcode data exceeds the raster input limit".into(),
+            ));
+        }
+        Ok(())
     }
 
     /// Helper to execute a drawing operation.
@@ -113,6 +137,7 @@ impl PngBackend {
     where
         F: FnOnce(&mut RgbImage, i32, i32),
     {
+        Self::validate_draw_bounds(x, y, width, height)?;
         if reverse_print {
             let mut temp_buf = ImageBuffer::from_pixel(width, height, Rgb([255, 255, 255]));
             draw_op(&mut temp_buf, 0, 0);
@@ -121,30 +146,6 @@ impl PngBackend {
             draw_op(&mut self.canvas, x as i32, y as i32);
         }
         Ok(())
-    }
-
-    fn parse_hex_color(&self, color: &Option<String>) -> Rgb<u8> {
-        if let Some(hex) = color {
-            let hex = hex.trim_start_matches('#');
-            if hex.len() == 6 {
-                if let (Ok(r), Ok(g), Ok(b)) = (
-                    u8::from_str_radix(&hex[0..2], 16),
-                    u8::from_str_radix(&hex[2..4], 16),
-                    u8::from_str_radix(&hex[4..6], 16),
-                ) {
-                    return Rgb([r, g, b]);
-                }
-            } else if hex.len() == 3
-                && let (Ok(r), Ok(g), Ok(b)) = (
-                    u8::from_str_radix(&hex[0..1], 16),
-                    u8::from_str_radix(&hex[1..2], 16),
-                    u8::from_str_radix(&hex[2..3], 16),
-                )
-            {
-                return Rgb([r * 17, g * 17, b * 17]);
-            }
-        }
-        Rgb([0, 0, 0])
     }
 
     fn get_text_width(
@@ -163,10 +164,8 @@ impl PngBackend {
 
 impl ZplForgeBackend for PngBackend {
     fn setup_page(&mut self, width: f64, height: f64, _resolution: f32) {
-        // Safety limit to avoid OOM: 8192x8192 is enough for most labels
-        const MAX_DIM: u32 = 8192;
-        let w = (width as u32).min(MAX_DIM);
-        let h = (height as u32).min(MAX_DIM);
+        let w = (width as u32).min(super::MAX_IMAGE_DIMENSION);
+        let h = (height as u32).min(super::MAX_IMAGE_DIMENSION);
         self.canvas = ImageBuffer::from_pixel(w, h, Rgb([255, 255, 255]));
     }
 
@@ -183,12 +182,14 @@ impl ZplForgeBackend for PngBackend {
         width: Option<u32>,
         orientation: char,
         text: &str,
-        _reverse_print: bool,
+        reverse_print: bool,
         color: Option<String>,
     ) -> ZplResult<()> {
+        let text_color = Rgb(super::parse_hex_color(color.as_deref())?);
         if text.is_empty() {
             return Ok(());
         }
+        super::validate_raster_dimensions(width.unwrap_or(1).max(1), height.unwrap_or(1).max(1))?;
 
         let fm = self
             .font_manager
@@ -199,20 +200,58 @@ impl ZplForgeBackend for PngBackend {
             .ok_or_else(|| ZplError::FontError(format!("Font not found: {}", font)))?;
         let font_data = font_arc.clone();
         let scale = layout.px;
+        if !scale.x.is_finite()
+            || !scale.y.is_finite()
+            || scale.x <= 0.0
+            || scale.y <= 0.0
+            || !layout.cell_h.is_finite()
+            || layout.cell_h <= 0.0
+            || !layout.baseline.is_finite()
+        {
+            return Err(ZplError::FontError("Invalid text layout dimensions".into()));
+        }
 
         // imageproc places the baseline at `y + ascent`; shift so capital
         // letters start exactly at the ZPL cell top (Zebra behavior).
         let ascent = font_data.as_scaled(scale).ascent();
-        let y_offset = (layout.baseline - ascent).round() as i32;
+        let offset = (layout.baseline - ascent).round();
+        if !offset.is_finite() || offset.abs() > super::MAX_IMAGE_DIMENSION as f32 {
+            return Err(ZplError::FontError(
+                "Text baseline offset exceeds raster limits".into(),
+            ));
+        }
+        let y_offset = offset as i32;
+        let text_w = self.get_text_width(text, font, height, width).max(1);
+        let font_h = (layout.cell_h.ceil() as u32).max(1);
+        super::validate_raster_dimensions(text_w, font_h)?;
 
-        let text_color = self.parse_hex_color(&color);
+        // Ink can rise above the cap line and descend below the character cell.
+        // Keep that padding in the mask, then compensate at the blit anchor.
+        let top_pad = (-y_offset).max(0) as u32;
+        let descent = font_data.as_scaled(scale).descent();
+        let ink_bottom = (layout.baseline - descent).ceil();
+        if !ink_bottom.is_finite() || ink_bottom.abs() > 2.0 * super::MAX_IMAGE_DIMENSION as f32 {
+            return Err(ZplError::FontError(
+                "Text ink bounds exceed raster limits".into(),
+            ));
+        }
+        let bottom_pad = (ink_bottom as i32 - font_h as i32).max(0) as u32;
+        let temp_h = font_h
+            .checked_add(top_pad)
+            .and_then(|h| h.checked_add(bottom_pad))
+            .ok_or_else(|| ZplError::FontError("Text raster dimensions overflow".into()))?;
+        super::validate_raster_dimensions(text_w, temp_h)?;
 
-        if !matches!(orientation, 'R' | 'I' | 'B') {
+        if !reverse_print && !matches!(orientation, 'R' | 'I' | 'B') {
+            Self::validate_draw_bounds(x, y, text_w, temp_h)?;
+            let draw_y = (y as i32)
+                .checked_add(y_offset)
+                .ok_or_else(|| ZplError::FontError("Text coordinates overflow".into()))?;
             draw_text_mut(
                 &mut self.canvas,
                 text_color,
                 x as i32,
-                y as i32 + y_offset,
+                draw_y,
                 scale,
                 &font_data,
                 text,
@@ -220,23 +259,13 @@ impl ZplForgeBackend for PngBackend {
             return Ok(());
         }
 
-        // Rotated text: render on a temporary transparent surface, rotate it, and blit
-        // non-transparent pixels so the background stays transparent.
-        //
-        // Ink can overflow the character cell on both sides: ascenders and
-        // accents rise above the cap line (`y_offset` is negative because the
-        // font ascent exceeds the cap height) and descenders can drop below
-        // `cell_h`. Pad the surface so nothing is clipped, then shift the blit
-        // anchor so the cell's top-left corner still lands exactly on (x, y).
-        let text_w = self.get_text_width(text, font, height, width).max(1);
-        let font_h = (layout.cell_h.ceil() as u32).max(1);
-        let top_pad = (-y_offset).max(0) as u32;
-        // `descent()` is negative: ink below the baseline reaches `baseline - descent`.
-        let descent = font_data.as_scaled(scale).descent();
-        let ink_bottom = (layout.baseline - descent).ceil() as i32;
-        let bottom_pad = (ink_bottom - font_h as i32).max(0) as u32;
-        let mut tmp =
-            RgbaImage::from_pixel(text_w, font_h + top_pad + bottom_pad, Rgba([0, 0, 0, 0]));
+        // Keep RGB constant under transparent pixels so coverage blending does
+        // not multiply an already coverage-weighted color a second time.
+        let mut tmp = RgbaImage::from_pixel(
+            text_w,
+            temp_h,
+            Rgba([text_color.0[0], text_color.0[1], text_color.0[2], 0]),
+        );
         let text_rgba = Rgba([text_color.0[0], text_color.0[1], text_color.0[2], 255]);
         draw_text_mut(
             &mut tmp,
@@ -248,25 +277,38 @@ impl ZplForgeBackend for PngBackend {
             text,
         );
 
-        // Rotation moves each pad to a different edge; only pads landing on
-        // the low-index side displace the cell content and must be subtracted
-        // from the anchor.
+        // Only padding landing on the low-index side displaces the cell origin.
         let (rotated, pad_x, pad_y) = match orientation {
-            // 90° cw: top pad → right edge, bottom pad → left edge.
+            // 90° cw: bottom padding lands on the left.
             'R' => (rotate90(&tmp), bottom_pad, 0),
-            // 180°: top pad → bottom edge, bottom pad → top edge.
+            // 180°: bottom padding lands on top.
             'I' => (rotate180(&tmp), 0, bottom_pad),
-            // 270° cw: top pad → left edge, bottom pad → right edge.
-            _ => (rotate270(&tmp), top_pad, 0),
+            // 270° cw: top padding lands on the left.
+            'B' => (rotate270(&tmp), top_pad, 0),
+            _ => (tmp, 0, top_pad),
         };
 
         let (cw, ch) = self.canvas.dimensions();
         for (sx, sy, p) in rotated.enumerate_pixels() {
-            if p.0[3] > 0 {
-                let dx = x as i64 + sx as i64 - pad_x as i64;
-                let dy = y as i64 + sy as i64 - pad_y as i64;
-                if (0..cw as i64).contains(&dx) && (0..ch as i64).contains(&dy) {
-                    self.canvas[(dx as u32, dy as u32)] = Rgb([p.0[0], p.0[1], p.0[2]]);
+            let alpha = u32::from(p.0[3]);
+            if alpha == 0 {
+                continue;
+            }
+            let dx = i64::from(x) + i64::from(sx) - i64::from(pad_x);
+            let dy = i64::from(y) + i64::from(sy) - i64::from(pad_y);
+            if (0..i64::from(cw)).contains(&dx) && (0..i64::from(ch)).contains(&dy) {
+                let pixel = &mut self.canvas[(dx as u32, dy as u32)];
+                for channel in 0..3 {
+                    let background = pixel.0[channel];
+                    let foreground = if reverse_print {
+                        background ^ 255
+                    } else {
+                        p.0[channel]
+                    };
+                    pixel.0[channel] = ((u32::from(background) * (255 - alpha)
+                        + u32::from(foreground) * alpha
+                        + 127)
+                        / 255) as u8;
                 }
             }
         }
@@ -291,7 +333,10 @@ impl ZplForgeBackend for PngBackend {
         let r = (rounding as f64 * 8.0) as i32;
 
         let (draw_color, clear_color) = if let Some(custom) = custom_color {
-            (self.parse_hex_color(&Some(custom)), Rgb([255, 255, 255]))
+            (
+                Rgb(super::parse_hex_color(Some(&custom))?),
+                Rgb([255, 255, 255]),
+            )
         } else if color == 'B' {
             (Rgb([0, 0, 0]), Rgb([255, 255, 255]))
         } else {
@@ -325,7 +370,8 @@ impl ZplForgeBackend for PngBackend {
                 };
 
             draw_rounded_fill(img, px, py, w, h, r, draw_color);
-            if t * 2 < w && t * 2 < h {
+            // Compare before doubling: an oversized thickness simply fills the box.
+            if t < w.div_ceil(2) && t < h.div_ceil(2) {
                 draw_rounded_fill(
                     img,
                     px + t as i32,
@@ -351,8 +397,11 @@ impl ZplForgeBackend for PngBackend {
         custom_color: Option<String>,
         reverse_print: bool,
     ) -> ZplResult<()> {
-        let color = self.parse_hex_color(&custom_color);
+        let color = Rgb(super::parse_hex_color(custom_color.as_deref())?);
         let clear_color = Rgb([255, 255, 255]);
+        let diameter = radius
+            .checked_mul(2)
+            .ok_or_else(|| ZplError::BackendError("Circle dimensions overflow".into()))?;
 
         let draw_op = |img: &mut RgbImage, px: i32, py: i32| {
             let center_x = px + radius as i32;
@@ -369,7 +418,7 @@ impl ZplForgeBackend for PngBackend {
             }
         };
 
-        self.draw_wrapper(x, y, radius * 2, radius * 2, reverse_print, draw_op)
+        self.draw_wrapper(x, y, diameter, diameter, reverse_print, draw_op)
     }
 
     fn draw_graphic_ellipse(
@@ -383,7 +432,7 @@ impl ZplForgeBackend for PngBackend {
         custom_color: Option<String>,
         reverse_print: bool,
     ) -> ZplResult<()> {
-        let color = self.parse_hex_color(&custom_color);
+        let color = Rgb(super::parse_hex_color(custom_color.as_deref())?);
         let clear_color = Rgb([255, 255, 255]);
 
         let draw_op = |img: &mut RgbImage, px: i32, py: i32| {
@@ -393,8 +442,8 @@ impl ZplForgeBackend for PngBackend {
             let center_y = py + ry;
             draw_filled_ellipse_mut(img, (center_x, center_y), rx, ry, color);
 
-            let t = thickness as i32;
-            if rx > t && ry > t {
+            if thickness < rx as u32 && thickness < ry as u32 {
+                let t = thickness as i32;
                 draw_filled_ellipse_mut(img, (center_x, center_y), rx - t, ry - t, clear_color);
             }
         };
@@ -411,11 +460,18 @@ impl ZplForgeBackend for PngBackend {
         data: &[u8],
         reverse_print: bool,
     ) -> ZplResult<()> {
+        let expected_bytes = super::bitmap_size(width, height)?;
+        if data.len() != expected_bytes {
+            return Err(ZplError::ImageError(format!(
+                "Graphic field data length mismatch: expected {expected_bytes}, got {}",
+                data.len()
+            )));
+        }
+        let row_bytes = width.div_ceil(8) as usize;
         let draw_op = |img: &mut RgbImage, px: i32, py: i32| {
-            let row_bytes = width.div_ceil(8);
             let (img_w, img_h) = (img.width() as i32, img.height() as i32);
 
-            for (row_idx, row_data) in data.chunks(row_bytes as usize).enumerate() {
+            for (row_idx, row_data) in data.chunks(row_bytes).enumerate() {
                 let dy = py + row_idx as i32;
                 if dy < 0 || dy >= img_h || row_idx as u32 >= height {
                     continue;
@@ -454,28 +510,24 @@ impl ZplForgeBackend for PngBackend {
         height: u32,
         data: &str,
     ) -> ZplResult<()> {
-        let image_data = general_purpose::STANDARD
-            .decode(data.trim())
-            .map_err(|e| ZplError::ImageError(format!("Failed to decode base64: {}", e)))?;
-
-        let img = image::load_from_memory(&image_data)
-            .map_err(|e| ZplError::ImageError(format!("Failed to load image: {}", e)))?
-            .to_rgb8();
-
+        super::validate_raster_dimensions(width.max(1), height.max(1))?;
+        let img = super::decode_color_image(data)?;
         let (orig_w, orig_h) = img.dimensions();
+        super::validate_raster_dimensions(orig_w, orig_h)?;
         let (target_w, target_h) = match (width, height) {
             (0, 0) => (orig_w, orig_h),
             (w, 0) => {
-                let h = (orig_h as f32 * (w as f32 / orig_w as f32)).round() as u32;
+                let h = (orig_h as f64 * (w as f64 / orig_w as f64)).round() as u32;
                 (w, h)
             }
             (0, h) => {
-                let w = (orig_w as f32 * (h as f32 / orig_h as f32)).round() as u32;
+                let w = (orig_w as f64 * (h as f64 / orig_h as f64)).round() as u32;
                 (w, h)
             }
             (w, h) => (w, h),
         };
 
+        super::validate_raster_dimensions(target_w, target_h)?;
         let resized_img = if target_w != orig_w || target_h != orig_h {
             image::imageops::resize(
                 &img,
@@ -567,16 +619,10 @@ impl ZplForgeBackend for PngBackend {
         )?;
 
         let mag = max(magnification, 1);
-        self.fill_matrix_cells(
-            x,
-            y + super::QR_ORIGIN_Y_OFFSET,
-            orientation,
-            mag,
-            mag,
-            &bit_matrix,
-            reverse_print,
-        );
-        Ok(())
+        let y = y
+            .checked_add(super::QR_ORIGIN_Y_OFFSET)
+            .ok_or_else(|| ZplError::BackendError("QR origin coordinates overflow".into()))?;
+        self.fill_matrix_cells(x, y, orientation, mag, mag, &bit_matrix, reverse_print)
     }
 
     fn draw_datamatrix(
@@ -600,8 +646,7 @@ impl ZplForgeBackend for PngBackend {
             barcode_cache::encode_cached(BarcodeFormat::DATA_MATRIX, data, "sq", Some(&hints))?;
 
         let m = max(module_size, 1);
-        self.fill_matrix_cells(x, y, orientation, m, m, &bit_matrix, reverse_print);
-        Ok(())
+        self.fill_matrix_cells(x, y, orientation, m, m, &bit_matrix, reverse_print)
     }
 
     fn draw_pdf417(
@@ -634,24 +679,22 @@ impl ZplForgeBackend for PngBackend {
 
         let cw = max(module_width, 1);
         let ch = max(row_height, 1);
-        self.fill_matrix_cells(x, y, orientation, cw, ch, &bit_matrix, reverse_print);
-        Ok(())
+        self.fill_matrix_cells(x, y, orientation, cw, ch, &bit_matrix, reverse_print)
     }
 
     fn draw_micropdf417(
         &mut self,
-        x: u32,
-        y: u32,
-        orientation: char,
-        height: u32,
+        _x: u32,
+        _y: u32,
+        _orientation: char,
+        _height: u32,
         _mode: u32,
-        data: &str,
-        reverse_print: bool,
+        _data: &str,
+        _reverse_print: bool,
     ) -> ZplResult<()> {
-        let bit_matrix = barcode_cache::encode_cached(BarcodeFormat::PDF_417, data, "", None)?;
-        let ch = max(height, 1);
-        self.fill_matrix_cells(x, y, orientation, 1, ch, &bit_matrix, reverse_print);
-        Ok(())
+        Err(ZplError::BackendError(
+            "MicroPDF417 is not supported by the PNG backend".into(),
+        ))
     }
 
     fn draw_aztec_code(
@@ -665,8 +708,7 @@ impl ZplForgeBackend for PngBackend {
     ) -> ZplResult<()> {
         let bit_matrix = barcode_cache::encode_cached(BarcodeFormat::AZTEC, data, "", None)?;
         let m = max(magnification, 1);
-        self.fill_matrix_cells(x, y, orientation, m, m, &bit_matrix, reverse_print);
-        Ok(())
+        self.fill_matrix_cells(x, y, orientation, m, m, &bit_matrix, reverse_print)
     }
 
     fn draw_code39(
@@ -715,9 +757,17 @@ impl ZplForgeBackend for PngBackend {
         data: &str,
         reverse_print: bool,
     ) -> ZplResult<()> {
+        Self::validate_barcode_input(height, module_width, data)?;
         // MSI and POSTNET have no rxing writer; both are encoded natively.
         match kind {
             Barcode1DKind::Msi => {
+                let narrow = module_width.max(1);
+                let wide = ((narrow as f32) * ratio).round().max(narrow as f32 + 1.0);
+                if !ratio.is_finite() || ratio <= 0.0 || wide > super::MAX_IMAGE_DIMENSION as f32 {
+                    return Err(ZplError::BackendError(
+                        "Invalid MSI wide:narrow ratio".into(),
+                    ));
+                }
                 let check = symbology::MsiCheck::from_zpl(check_digit);
                 let elements = symbology::msi_elements(data, check, module_width, ratio);
                 let text = symbology::msi_text(data, check);
@@ -780,18 +830,19 @@ impl ZplForgeBackend for PngBackend {
         reverse_print: bool,
     ) -> ZplResult<()> {
         let draw_color = if custom_color.is_some() {
-            self.parse_hex_color(&custom_color)
+            Rgb(super::parse_hex_color(custom_color.as_deref())?)
         } else if color == 'W' {
             Rgb([255, 255, 255])
         } else {
             Rgb([0, 0, 0])
         };
 
-        let w = max(width, 1) as i32;
-        let h = max(height, 1) as i32;
-        let t = (max(thickness, 1) as i32).min(w);
+        let w = max(width, 1);
+        let h = max(height, 1);
+        let t = max(thickness, 1).min(w);
 
         let draw_op = move |img: &mut RgbImage, px: i32, py: i32| {
+            let (w, h, t) = (w as i32, h as i32, t as i32);
             // Filled parallelogram with horizontal thickness `t`.
             let pts = if diagonal_orientation == 'L' {
                 // '\' top-left → bottom-right
@@ -813,7 +864,7 @@ impl ZplForgeBackend for PngBackend {
             draw_polygon_mut(img, &pts, draw_color);
         };
 
-        self.draw_wrapper(x, y, w as u32, h as u32, reverse_print, draw_op)
+        self.draw_wrapper(x, y, w, h, reverse_print, draw_op)
     }
 
     fn finalize(&mut self) -> ZplResult<Vec<u8>> {
@@ -840,11 +891,21 @@ impl PngBackend {
         cell_h: u32,
         bit_matrix: &BitMatrix,
         reverse_print: bool,
-    ) {
+    ) -> ZplResult<()> {
         let bw = bit_matrix.getWidth();
         let bh = bit_matrix.getHeight();
-        let full_w = bw * cell_w;
-        let full_h = bh * cell_h;
+        let full_w = bw
+            .checked_mul(cell_w)
+            .ok_or_else(|| ZplError::BackendError("Barcode width overflows".into()))?;
+        let full_h = bh
+            .checked_mul(cell_h)
+            .ok_or_else(|| ZplError::BackendError("Barcode height overflows".into()))?;
+        let (draw_w, draw_h) = if matches!(orientation, 'R' | 'B') {
+            (full_h, full_w)
+        } else {
+            (full_w, full_h)
+        };
+        Self::validate_draw_bounds(x, y, draw_w, draw_h)?;
 
         for gy in 0..bh {
             for gx in 0..bw {
@@ -877,6 +938,7 @@ impl PngBackend {
                 }
             }
         }
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -896,6 +958,17 @@ impl PngBackend {
         hints: Option<EncodeHints>,
         hints_key: &str,
     ) -> ZplResult<()> {
+        Self::validate_barcode_input(height, module_width, data)?;
+        let mw = module_width.max(1);
+        if symbology::is_two_width(format)
+            && (!ratio.is_finite()
+                || ratio <= 0.0
+                || ((mw as f32) * ratio).round() > super::MAX_IMAGE_DIMENSION as f32)
+        {
+            return Err(ZplError::BackendError(
+                "Invalid barcode wide:narrow ratio".into(),
+            ));
+        }
         let numeric_data;
         let data = match format {
             BarcodeFormat::EAN_13
@@ -921,8 +994,7 @@ impl PngBackend {
         };
 
         let bit_matrix = barcode_cache::encode_cached(format, data, hints_key, hints.as_ref())?;
-
-        let mw = max(module_width, 1);
+        super::validate_raster_dimensions(bit_matrix.getWidth(), bit_matrix.getHeight())?;
         // Two-width symbologies are re-laid-out at the ^BY ratio; every other
         // symbology keeps the encoder's module widths.
         let elements = symbology::matrix_elements(
@@ -965,13 +1037,24 @@ impl PngBackend {
         data: &str,
     ) -> ZplResult<()> {
         let bh = height;
-        let bw: u32 = elements.iter().map(|e| e.width).sum();
+        let bw = elements.iter().try_fold(0u32, |total, element| {
+            if element.width == 0 {
+                return Err(ZplError::BackendError(
+                    "Barcode element has zero width".into(),
+                ));
+            }
+            total
+                .checked_add(element.width)
+                .ok_or_else(|| ZplError::BackendError("Barcode width overflows".into()))
+        })?;
 
         let (full_w, full_h) = match orientation {
             'N' | 'I' => (bw, bh),
             'R' | 'B' => (bh, bw),
             _ => (bw, bh),
         };
+        Self::validate_draw_bounds(x, y, full_w, full_h)?;
+        super::validate_raster_dimensions(module_width.max(1), 1)?;
 
         let transform_rect = |lx: i32, ly: i32, w: u32, h: u32| -> Rect {
             match orientation {
@@ -1014,12 +1097,18 @@ impl PngBackend {
             let text_y = if interpretation_line_above == 'Y' {
                 y.saturating_sub(text_h + gap)
             } else {
-                y + full_h + gap
+                y.checked_add(full_h)
+                    .and_then(|v| v.checked_add(gap))
+                    .ok_or_else(|| {
+                        ZplError::BackendError("Barcode text coordinates overflow".into())
+                    })?
             };
 
             let text_width = self.get_text_width(data, font_char, Some(text_h), Some(text_w));
             let text_x = if full_w > text_width {
-                x + (full_w - text_width) / 2
+                x.checked_add((full_w - text_width) / 2).ok_or_else(|| {
+                    ZplError::BackendError("Barcode text coordinates overflow".into())
+                })?
             } else {
                 x
             };
@@ -1032,7 +1121,7 @@ impl PngBackend {
                 Some(text_w),
                 'N',
                 data,
-                false,
+                reverse_print,
                 None,
             )?;
         }
@@ -1061,9 +1150,27 @@ impl PngBackend {
     ) -> ZplResult<()> {
         let bars = symbology::postnet_bars(data);
         let (bar_w, gap) = symbology::postnet_pitch(module_width);
-        let pitch = bar_w + gap;
+        let pitch = bar_w
+            .checked_add(gap)
+            .ok_or_else(|| ZplError::BackendError("POSTNET pitch overflows".into()))?;
+        let bar_count = u32::try_from(bars.len())
+            .map_err(|_| ZplError::BackendError("POSTNET bar count overflows".into()))?;
+        let full_w = bar_count
+            .checked_mul(pitch)
+            .and_then(|w| w.checked_sub(gap))
+            .ok_or_else(|| ZplError::BackendError("POSTNET width overflows".into()))?;
+        let (draw_w, draw_h) = if matches!(orientation, 'R' | 'B') {
+            (height, full_w)
+        } else {
+            (full_w, height)
+        };
+        Self::validate_draw_bounds(x, y, draw_w, draw_h)?;
         let short_h = ((height as f32) * symbology::POSTNET_SHORT_RATIO).round() as u32;
-        let full_w = bars.len() as u32 * bar_w + bars.len().saturating_sub(1) as u32 * gap;
+        if short_h == 0 {
+            return Err(ZplError::BackendError(
+                "POSTNET short bars have zero height".into(),
+            ));
+        }
 
         for (i, bar) in bars.iter().enumerate() {
             let h = match bar {
@@ -1100,12 +1207,18 @@ impl PngBackend {
             let text_y = if interpretation_line_above == 'Y' {
                 y.saturating_sub(text_h + gap)
             } else {
-                y + height + gap
+                y.checked_add(height)
+                    .and_then(|v| v.checked_add(gap))
+                    .ok_or_else(|| {
+                        ZplError::BackendError("POSTNET text coordinates overflow".into())
+                    })?
             };
             let digits: String = data.chars().filter(|c| c.is_ascii_digit()).collect();
             let text_width = self.get_text_width(&digits, font_char, Some(text_h), Some(text_w));
             let text_x = if full_w > text_width {
-                x + (full_w - text_width) / 2
+                x.checked_add((full_w - text_width) / 2).ok_or_else(|| {
+                    ZplError::BackendError("POSTNET text coordinates overflow".into())
+                })?
             } else {
                 x
             };
@@ -1117,7 +1230,7 @@ impl PngBackend {
                 Some(text_w),
                 'N',
                 &digits,
-                false,
+                reverse_print,
                 None,
             )?;
         }

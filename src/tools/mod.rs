@@ -1,11 +1,22 @@
 //! High-level decoding and data manipulation utilities for ZPL assets.
 
-#[cfg(any(feature = "png", feature = "pdf"))]
-use crate::ZplError;
-#[cfg(any(feature = "png", feature = "pdf"))]
-use crate::ZplResult;
+use crate::{ZplError, ZplResult};
 #[cfg(any(feature = "png", feature = "pdf"))]
 use image::GenericImageView;
+
+pub(crate) const MAX_DECODED_SIZE: usize = 10 * 1024 * 1024;
+
+fn reserve_decoded(output: &mut Vec<u8>, additional: usize) -> ZplResult<usize> {
+    let size = output
+        .len()
+        .checked_add(additional)
+        .filter(|&size| size <= MAX_DECODED_SIZE)
+        .ok_or_else(|| ZplError::SecurityLimitExceeded("Decoded bitmap exceeds 10 MiB".into()))?;
+    output.try_reserve(additional).map_err(|error| {
+        ZplError::SecurityLimitExceeded(format!("Cannot allocate decoded bitmap: {error}"))
+    })?;
+    Ok(size)
+}
 
 /// Decodes ZPL compressed image data, typically used in the `^GF` (Graphic Field) command.
 ///
@@ -19,152 +30,140 @@ use image::GenericImageView;
 /// # Arguments
 /// * `encoded_str` - The ZPL-encoded string.
 /// * `bytes_per_row` - The number of bytes in a single row of the image.
-pub fn zpl_decode(encoded_str: &str, bytes_per_row: usize) -> Vec<u8> {
-    let mut output: Vec<u8> = Vec::new();
-    let mut multiplier: usize = 0;
-    let mut high_nibble: Option<u8> = None;
+///
+/// # Errors
+/// Returns an error for invalid data, a zero row size, allocation failure, or
+/// decoded data exceeding 10 MiB. No partial bitmap is returned on failure.
+pub fn zpl_decode(encoded_str: &str, bytes_per_row: usize) -> ZplResult<Vec<u8>> {
+    if bytes_per_row == 0 {
+        return Err(ZplError::ImageError(
+            "Bitmap row size must be positive".into(),
+        ));
+    }
+    if bytes_per_row > MAX_DECODED_SIZE {
+        return Err(ZplError::SecurityLimitExceeded(
+            "Bitmap row exceeds 10 MiB".into(),
+        ));
+    }
+
+    let mut output = Vec::new();
+    let mut multiplier = 0usize;
+    let mut high_nibble = None;
     let mut last_was_row_terminator = false;
 
-    // Safety limit to avoid OOM from malformed input or memory exhaustion attacks.
-    const MAX_DECODED_SIZE: usize = 10 * 1024 * 1024; // 10MB limit
-
     for c in encoded_str.chars() {
-        if output.len() > MAX_DECODED_SIZE {
-            break;
-        }
-
         match c {
-            'G'..='Y' => multiplier = multiplier.saturating_add((c as usize - 'G' as usize) + 1),
-            'g'..='z' => {
-                multiplier = multiplier.saturating_add(((c as usize - 'g' as usize) + 1) * 20)
+            'G'..='Y' | 'g'..='z' => {
+                let repeat = if c.is_ascii_uppercase() {
+                    c as usize - 'G' as usize + 1
+                } else {
+                    (c as usize - 'g' as usize + 1) * 20
+                };
+                multiplier = multiplier.checked_add(repeat).ok_or_else(|| {
+                    ZplError::SecurityLimitExceeded("Bitmap repeat count overflow".into())
+                })?;
             }
-
             ':' => {
-                if let Some(high) = high_nibble {
+                if let Some(high) = high_nibble.take() {
+                    reserve_decoded(&mut output, 1)?;
                     output.push(high << 4);
-                    high_nibble = None;
                 }
 
-                if bytes_per_row > 0 {
-                    let current_row_pos = output.len() % bytes_per_row;
-                    let total_repeats = if multiplier == 0 { 1 } else { multiplier };
-                    let mut repeats_done = 0;
-
-                    if current_row_pos > 0 {
-                        let missing = bytes_per_row - current_row_pos;
-                        let current_row_start = output.len() - current_row_pos;
-
-                        if current_row_start >= bytes_per_row {
-                            let prev_row_start = current_row_start - bytes_per_row;
-                            let copy_start = prev_row_start + current_row_pos;
-                            let copy_end = prev_row_start + bytes_per_row;
-
-                            let suffix = output[copy_start..copy_end].to_vec();
-                            output.extend_from_slice(&suffix);
-                        } else {
-                            output.extend(std::iter::repeat_n(0x00, missing));
-                        }
-                        repeats_done += 1;
+                let current_row_pos = output.len() % bytes_per_row;
+                let total_repeats = multiplier.max(1);
+                let mut repeats_done = 0;
+                if current_row_pos > 0 {
+                    let missing = bytes_per_row - current_row_pos;
+                    let current_row_start = output.len() - current_row_pos;
+                    let size = reserve_decoded(&mut output, missing)?;
+                    if current_row_start >= bytes_per_row {
+                        let previous = current_row_start - bytes_per_row;
+                        output.extend_from_within(
+                            previous + current_row_pos..previous + bytes_per_row,
+                        );
+                    } else {
+                        output.resize(size, 0);
                     }
+                    repeats_done = 1;
+                }
 
-                    if repeats_done < total_repeats {
-                        let remaining = total_repeats - repeats_done;
-                        // Avoid massive memory allocations
-                        let remaining = remaining.min(1000);
-
-                        if output.len() >= bytes_per_row {
-                            let start = output.len() - bytes_per_row;
-                            let last_row = output[start..].to_vec();
-                            for _ in 0..remaining {
-                                if output.len() + last_row.len() > MAX_DECODED_SIZE {
-                                    break;
-                                }
-                                output.extend_from_slice(&last_row);
-                            }
-                        } else {
-                            let empty_row = vec![0u8; bytes_per_row];
-                            for _ in 0..remaining {
-                                if output.len() + empty_row.len() > MAX_DECODED_SIZE {
-                                    break;
-                                }
-                                output.extend_from_slice(&empty_row);
-                            }
-                        }
+                let remaining = total_repeats - repeats_done;
+                let additional = bytes_per_row.checked_mul(remaining).ok_or_else(|| {
+                    ZplError::SecurityLimitExceeded("Bitmap repeat size overflow".into())
+                })?;
+                let size = reserve_decoded(&mut output, additional)?;
+                if output.len() >= bytes_per_row {
+                    let end = output.len();
+                    let start = end - bytes_per_row;
+                    for _ in 0..remaining {
+                        output.extend_from_within(start..end);
                     }
+                } else {
+                    output.resize(size, 0);
                 }
                 multiplier = 0;
                 last_was_row_terminator = true;
             }
-
             c if c.is_ascii_hexdigit() => {
-                let val = c.to_digit(16).unwrap_or(0) as u8;
-                let count = if multiplier == 0 { 1 } else { multiplier };
-                multiplier = 0;
-
-                // Protection against extreme repeat counts
-                let count = count.min(10000);
-
+                let value = c
+                    .to_digit(16)
+                    .ok_or_else(|| ZplError::ImageError(format!("Invalid bitmap hex digit: {c}")))?
+                    as u8;
+                let count = multiplier.max(1);
+                let nibbles = count
+                    .checked_add(usize::from(high_nibble.is_some()))
+                    .ok_or_else(|| {
+                        ZplError::SecurityLimitExceeded("Bitmap repeat count overflow".into())
+                    })?;
+                reserve_decoded(&mut output, nibbles / 2)?;
                 for _ in 0..count {
-                    if output.len() >= MAX_DECODED_SIZE {
-                        break;
-                    }
-                    if let Some(high) = high_nibble {
-                        output.push((high << 4) | val);
-                        high_nibble = None;
+                    if let Some(high) = high_nibble.take() {
+                        output.push((high << 4) | value);
                     } else {
-                        high_nibble = Some(val);
+                        high_nibble = Some(value);
                     }
                 }
+                multiplier = 0;
                 last_was_row_terminator = false;
             }
-
-            ',' => {
-                if let Some(high) = high_nibble {
-                    output.push(high << 4);
-                    high_nibble = None;
+            ',' | '!' => {
+                let fill = if c == ',' { 0 } else { 0xFF };
+                if let Some(high) = high_nibble.take() {
+                    reserve_decoded(&mut output, 1)?;
+                    output.push((high << 4) | (fill & 0x0F));
                 }
-
-                if bytes_per_row > 0 {
-                    let current_row_pos = output.len() % bytes_per_row;
-                    if current_row_pos != 0 {
-                        let padding = bytes_per_row - current_row_pos;
-                        output.extend(std::iter::repeat_n(0x00, padding));
-                    } else if last_was_row_terminator {
-                        output.extend(std::iter::repeat_n(0x00, bytes_per_row));
-                    }
-                }
+                let row_pos = output.len() % bytes_per_row;
+                let padding = if row_pos != 0 {
+                    bytes_per_row - row_pos
+                } else if last_was_row_terminator || output.is_empty() {
+                    bytes_per_row
+                } else {
+                    0
+                };
+                let size = reserve_decoded(&mut output, padding)?;
+                output.resize(size, fill);
                 multiplier = 0;
                 last_was_row_terminator = true;
             }
-
-            '!' => {
-                if let Some(high) = high_nibble {
-                    output.push((high << 4) | 0x0F);
-                    high_nibble = None;
-                }
-
-                if bytes_per_row > 0 {
-                    let current_row_pos = output.len() % bytes_per_row;
-                    if current_row_pos != 0 {
-                        let padding = bytes_per_row - current_row_pos;
-                        output.extend(std::iter::repeat_n(0xFF, padding));
-                    } else if last_was_row_terminator {
-                        output.extend(std::iter::repeat_n(0xFF, bytes_per_row));
-                    }
-                }
-                multiplier = 0;
-                last_was_row_terminator = true;
+            c if c.is_ascii_whitespace() => {}
+            _ => {
+                return Err(ZplError::ImageError(format!(
+                    "Invalid bitmap data character: {c}"
+                )));
             }
-
-            _ => {}
         }
     }
 
+    if multiplier != 0 {
+        return Err(ZplError::ImageError(
+            "Bitmap repeat count has no following data".into(),
+        ));
+    }
     if let Some(high) = high_nibble {
+        reserve_decoded(&mut output, 1)?;
         output.push(high << 4);
     }
-
-    output
+    Ok(output)
 }
 
 /// Encodes raw image bytes into a ZPL-compatible hexadecimal string for use with the `^GF` command.

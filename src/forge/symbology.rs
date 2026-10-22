@@ -113,34 +113,30 @@ impl MsiCheck {
     }
 }
 
-/// Luhn-style mod-10 check digit as used by MSI: the digits in alternate
-/// positions counting from the right are concatenated, doubled, and their
-/// digit-sum added to the remaining digits.
+/// Luhn-style mod-10, accumulated by digit so long payloads cannot overflow.
 fn msi_mod10(digits: &[u8]) -> u8 {
-    let mut doubled = String::new();
-    let mut rest_sum = 0u32;
-    for (i, &d) in digits.iter().rev().enumerate() {
-        if i % 2 == 0 {
-            doubled.insert(0, (b'0' + d) as char);
-        } else {
-            rest_sum += d as u32;
-        }
-    }
-    let doubled: u32 = doubled.parse::<u32>().unwrap_or(0) * 2;
-    let digit_sum: u32 = doubled.to_string().bytes().map(|b| (b - b'0') as u32).sum();
-    ((10 - ((digit_sum + rest_sum) % 10)) % 10) as u8
-}
-
-/// IBM mod-11 check digit with weights cycling 2..7 from the right.
-fn msi_mod11(digits: &[u8]) -> u8 {
-    let sum: u32 = digits
+    let sum = digits
         .iter()
         .rev()
         .enumerate()
-        .map(|(i, &d)| d as u32 * (2 + (i % 6) as u32))
-        .sum();
-    let rem = sum % 11;
-    if rem == 0 { 0 } else { (11 - rem) as u8 }
+        .fold(0u8, |sum, (i, &digit)| {
+            let value = if i % 2 == 0 {
+                let doubled = digit * 2;
+                doubled / 10 + doubled % 10
+            } else {
+                digit
+            };
+            (sum + value) % 10
+        });
+    (10 - sum) % 10
+}
+
+/// IBM mod-11 check digit with weights cycling 2..7 from the right.
+pub(crate) fn msi_mod11(digits: impl DoubleEndedIterator<Item = u8>) -> u8 {
+    let remainder = digits.rev().enumerate().fold(0u8, |sum, (i, digit)| {
+        (sum + digit * (2 + (i % 6) as u8)) % 11
+    });
+    if remainder == 0 { 0 } else { 11 - remainder }
 }
 
 /// Encodes `data` as MSI / Modified Plessey elements.
@@ -171,7 +167,13 @@ pub(crate) fn msi_elements(
             digits.push(msi_mod10(&digits));
         }
         MsiCheck::Mod11Mod10 => {
-            digits.push(msi_mod11(&digits));
+            let check = msi_mod11(digits.iter().copied());
+            // Mod-11 can produce 10, which occupies two decimal digits.
+            if check == 10 {
+                digits.extend_from_slice(&[1, 0]);
+            } else {
+                digits.push(check);
+            }
             digits.push(msi_mod10(&digits));
         }
     }
@@ -218,7 +220,12 @@ pub(crate) fn msi_text(data: &str, check: MsiCheck) -> String {
             digits.push(msi_mod10(&digits));
         }
         MsiCheck::Mod11Mod10 => {
-            digits.push(msi_mod11(&digits));
+            let check = msi_mod11(digits.iter().copied());
+            if check == 10 {
+                digits.extend_from_slice(&[1, 0]);
+            } else {
+                digits.push(check);
+            }
             digits.push(msi_mod10(&digits));
         }
     }

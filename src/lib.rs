@@ -16,11 +16,13 @@
 //! Rendering a simple label to a PNG image:
 //!
 //! ```rust
+//! # fn main() -> zpl_forge::ZplResult<()> {
+//! # #[cfg(feature = "png")]
+//! # {
 //! use zpl_forge::{ZplEngine, Unit, Resolution};
 //! use zpl_forge::forge::png::PngBackend;
 //! use std::collections::HashMap;
 //!
-//! # fn main() -> zpl_forge::ZplResult<()> {
 //! let zpl_input = "^XA^FO50,50^A0N,50,50^FDZPL Forge^FS^XZ";
 //!
 //! // Create the engine by parsing ZPL data
@@ -36,6 +38,7 @@
 //! let png_bytes = engine.render(backend, &HashMap::new())?;
 //!
 //! // png_bytes now contains the raw PNG data
+//! # }
 //! # Ok(())
 //! # }
 //! ```
@@ -44,9 +47,13 @@
 //!
 //! To ensure stability and prevent Denial of Service (DoS) attacks via malformed input, `zpl-forge` implements the following restrictions:
 //! - **Canvas Size**: Rendering is limited to a maximum of **8192 x 8192 pixels**.
-//! - **Image Data**: Decoded bitmap data (`^GF`) cannot exceed **10 MB** per command.
-//! - **Safe Calculations**: Saturating arithmetic is used for all coordinate and dimension calculations to prevent integer overflows.
-//! - **Unit Normalization**: Input values for physical dimensions are validated to prevent negative sizes.
+//! - **Image Data**: Decoded bitmap data (`^GF`) and custom-image binary input cannot exceed **10 MiB** per command.
+//! - **Raster Allocations**: Image dimensions are validated before temporary rasterization or resizing.
+//! - **Invalid Input**: Unsupported compression, invalid colors, and exceeded limits return errors rather than partial output.
+//! - **Dimensions**: Rendering rejects zero-sized pages and non-finite or non-positive resolutions.
+//!
+//! Native PDF text uses WinAnsi (CP1252); characters outside this encoding return a font error.
+//! `^CI28` decodes `^FH` byte escapes as UTF-8; the default hex-field decoding retains its byte-to-character mapping.
 
 #![forbid(unsafe_code)]
 
