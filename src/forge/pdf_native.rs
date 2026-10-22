@@ -9,7 +9,6 @@ use std::io::Write;
 use std::sync::Arc;
 
 use ab_glyph::{Font, FontArc};
-use base64::{Engine as _, engine::general_purpose};
 use flate2::Compression;
 use flate2::write::ZlibEncoder;
 use lopdf::{Document, FontData, Object, Stream, dictionary};
@@ -23,6 +22,9 @@ use crate::{ZplError, ZplResult};
 
 /// Bézier control-point factor for approximating a quarter-circle arc.
 const KAPPA: f64 = 0.5522847498;
+
+/// `rxing`'s numeric code for PDF417 text compaction.
+const PDF417_TEXT_COMPACTION: u32 = 1;
 
 // ─── WinAnsi (CP1252) encoding ──────────────────────────────────────────────
 //
@@ -90,6 +92,160 @@ fn build_tounicode_cmap() -> Vec<u8> {
 
 // ─── Internal types ─────────────────────────────────────────────────────────
 
+type PdfColor = (f64, f64, f64);
+
+enum PdfFontFormat<'a> {
+    TrueType,
+    OpenTypeCff(&'a [u8]),
+}
+
+/// Classify by SFNT signature and outline tables, not the file extension.
+fn pdf_font_format(bytes: &[u8]) -> ZplResult<PdfFontFormat<'_>> {
+    let invalid = || ZplError::FontError("Invalid SFNT font table directory".into());
+    let header = bytes.get(..12).ok_or_else(invalid)?;
+    let signature = &header[..4];
+    if !matches!(signature, b"\x00\x01\x00\x00" | b"true" | b"OTTO") {
+        return Err(ZplError::FontError(
+            "PDF embedding requires a standalone TrueType or OpenType/CFF font; collections and other formats are unsupported".into(),
+        ));
+    }
+
+    let table_count = u16::from_be_bytes([header[4], header[5]]) as usize;
+    let records = bytes.get(12..12 + table_count * 16).ok_or_else(invalid)?;
+    let mut has_glyf = false;
+    let mut has_loca = false;
+    let mut cff = None;
+    for record in records.as_chunks::<16>().0 {
+        let offset = u32::from_be_bytes([record[8], record[9], record[10], record[11]]) as usize;
+        let length = u32::from_be_bytes([record[12], record[13], record[14], record[15]]) as usize;
+        let end = offset.checked_add(length).ok_or_else(invalid)?;
+        let table = bytes.get(offset..end).ok_or_else(invalid)?;
+        match &record[..4] {
+            b"glyf" => has_glyf = true,
+            b"loca" => has_loca = true,
+            b"CFF " => {
+                if cff.replace(table).is_some() {
+                    return Err(invalid());
+                }
+            }
+            b"CFF2" => {
+                return Err(ZplError::FontError(
+                    "CFF2 fonts are not supported by the native PDF backend".into(),
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    match signature {
+        b"\x00\x01\x00\x00" | b"true" if has_glyf && has_loca && cff.is_none() => {
+            Ok(PdfFontFormat::TrueType)
+        }
+        b"OTTO" if !has_glyf && !has_loca => {
+            let cff = cff.ok_or_else(|| {
+                ZplError::FontError("OpenType font has no supported CFF outline table".into())
+            })?;
+            Ok(PdfFontFormat::OpenTypeCff(cff_font_name(cff)?))
+        }
+        _ => Err(ZplError::FontError(
+            "SFNT signature and outline tables do not identify a supported PDF font format".into(),
+        )),
+    }
+}
+
+/// OpenType CFF has one Name INDEX entry and one Top DICT INDEX entry.
+fn cff_single_index(data: &[u8]) -> ZplResult<(&[u8], &[u8])> {
+    let invalid = || ZplError::FontError("Invalid single-font CFF index".into());
+    let header = data.get(..3).ok_or_else(invalid)?;
+    if u16::from_be_bytes([header[0], header[1]]) != 1 {
+        return Err(invalid());
+    }
+    let off_size = header[2] as usize;
+    if !(1..=4).contains(&off_size) {
+        return Err(invalid());
+    }
+    let base = 3 + 2 * off_size;
+    let offsets = data.get(3..base).ok_or_else(invalid)?;
+    let read_offset = |bytes: &[u8]| {
+        bytes
+            .iter()
+            .fold(0usize, |offset, byte| (offset << 8) | *byte as usize)
+    };
+    let first = read_offset(&offsets[..off_size]);
+    let last = read_offset(&offsets[off_size..]);
+    if first != 1 || last <= first {
+        return Err(invalid());
+    }
+    let end = base.checked_add(last - 1).ok_or_else(invalid)?;
+    let entry = data.get(base..end).ok_or_else(invalid)?;
+    let rest = data.get(end..).ok_or_else(invalid)?;
+    Ok((entry, rest))
+}
+
+/// Gate simple Type1 embedding on a named, non-CID CFF1 font. Skip DICT
+/// operands so an integer or real containing 12/30 is not mistaken for ROS.
+fn cff_font_name(cff: &[u8]) -> ZplResult<&[u8]> {
+    let invalid = || ZplError::FontError("Invalid CFF font header or Top DICT".into());
+    let header = cff.get(..4).ok_or_else(invalid)?;
+    if header[0] != 1 || header[1] != 0 || header[2] < 4 || !(1..=4).contains(&header[3]) {
+        return Err(invalid());
+    }
+    let data = cff.get(header[2] as usize..).ok_or_else(invalid)?;
+    let (name, rest) = cff_single_index(data)?;
+    if name.len() > 127
+        || name
+            .iter()
+            .any(|byte| !(33..=126).contains(byte) || b"()<>[]{}/%".contains(byte))
+    {
+        return Err(ZplError::FontError(
+            "Invalid CFF PostScript font name".into(),
+        ));
+    }
+    let (dict, _) = cff_single_index(rest)?;
+    let mut pos = 0;
+    while pos < dict.len() {
+        let byte = dict[pos];
+        pos += 1;
+        let extra = match byte {
+            28 => 2,
+            29 => 4,
+            30 => {
+                loop {
+                    let byte = *dict.get(pos).ok_or_else(invalid)?;
+                    pos += 1;
+                    if byte >> 4 == 0xF || byte & 0xF == 0xF {
+                        break;
+                    }
+                    if byte >> 4 == 0xD || byte & 0xF == 0xD {
+                        return Err(invalid());
+                    }
+                }
+                continue;
+            }
+            32..=246 => 0,
+            247..=254 => 1,
+            12 => {
+                let operator = *dict.get(pos).ok_or_else(invalid)?;
+                pos += 1;
+                if operator == 30 {
+                    return Err(ZplError::FontError(
+                        "CID-keyed CFF fonts require composite PDF fonts and are unsupported"
+                            .into(),
+                    ));
+                }
+                continue;
+            }
+            0..=11 | 13..=21 => 0,
+            _ => return Err(invalid()),
+        };
+        pos = pos
+            .checked_add(extra)
+            .filter(|&end| end <= dict.len())
+            .ok_or_else(invalid)?;
+    }
+    Ok(name)
+}
+
 /// Collected image data to be embedded as a PDF XObject during [`PdfNativeBackend::finalize`].
 struct ImageXObject {
     name: String,
@@ -104,8 +260,8 @@ struct ImageXObject {
 
 /// A rendering backend that produces PDF documents with native vector operations.
 ///
-/// Text is rendered using an embedded TrueType font, shapes are drawn as PDF
-/// paths with Bézier curves, and barcodes are composed of filled rectangles.
+/// Text uses embedded TrueType or OpenType/CFF fonts; shapes are PDF paths
+/// with Bézier curves, and barcodes are composed of filled rectangles.
 /// Bitmap data (graphic fields, custom images) is embedded as compressed
 /// XObject image streams.
 pub struct PdfNativeBackend {
@@ -204,34 +360,11 @@ impl PdfNativeBackend {
 
     // ── colour helpers ─────────────────────────────────────────────
 
-    /// Parse `#RRGGBB` / `#RGB` into `(r, g, b)` in 0.0 – 1.0.  Defaults to
-    /// black when the string is absent or malformed.
-    fn parse_hex_color_f64(color: &Option<String>) -> (f64, f64, f64) {
-        if let Some(hex) = color {
-            let hex = hex.trim_start_matches('#');
-            if hex.len() == 6 {
-                if let (Ok(r), Ok(g), Ok(b)) = (
-                    u8::from_str_radix(&hex[0..2], 16),
-                    u8::from_str_radix(&hex[2..4], 16),
-                    u8::from_str_radix(&hex[4..6], 16),
-                ) {
-                    return (r as f64 / 255.0, g as f64 / 255.0, b as f64 / 255.0);
-                }
-            } else if hex.len() == 3
-                && let (Ok(r), Ok(g), Ok(b)) = (
-                    u8::from_str_radix(&hex[0..1], 16),
-                    u8::from_str_radix(&hex[1..2], 16),
-                    u8::from_str_radix(&hex[2..3], 16),
-                )
-            {
-                return (
-                    r as f64 * 17.0 / 255.0,
-                    g as f64 * 17.0 / 255.0,
-                    b as f64 * 17.0 / 255.0,
-                );
-            }
-        }
-        (0.0, 0.0, 0.0)
+    /// Parse a validated colour into PDF components in 0.0 – 1.0.
+    /// An absent colour is black; malformed values return an error.
+    fn parse_hex_color_f64(color: &Option<String>) -> ZplResult<PdfColor> {
+        let [r, g, b] = super::parse_hex_color(color.as_deref())?;
+        Ok((r as f64 / 255.0, g as f64 / 255.0, b as f64 / 255.0))
     }
 
     /// Resolve the *draw* and *clear* colours for a graphic element.
@@ -243,14 +376,14 @@ impl PdfNativeBackend {
     fn resolve_colors(
         color: char,
         custom_color: &Option<String>,
-    ) -> ((f64, f64, f64), (f64, f64, f64)) {
-        if custom_color.is_some() {
-            (Self::parse_hex_color_f64(custom_color), (1.0, 1.0, 1.0))
+    ) -> ZplResult<(PdfColor, PdfColor)> {
+        Ok(if custom_color.is_some() {
+            (Self::parse_hex_color_f64(custom_color)?, (1.0, 1.0, 1.0))
         } else if color == 'B' {
             ((0.0, 0.0, 0.0), (1.0, 1.0, 1.0))
         } else {
             ((1.0, 1.0, 1.0), (0.0, 0.0, 0.0))
-        }
+        })
     }
 
     // ── low-level PDF operation emitters ────────────────────────────
@@ -316,12 +449,10 @@ impl PdfNativeBackend {
         self.content.push(b'\n');
     }
 
-    /// Emit `(escaped) Tj\n`, encoding the text as WinAnsi (CP1252) to match
-    /// the embedded fonts' /Encoding. Unmappable characters become '?'.
-    fn emit_tj(&mut self, text: &str) {
+    /// Emit `(escaped) Tj\n` from text already validated and encoded as WinAnsi.
+    fn emit_tj(&mut self, text: &[u8]) {
         self.content.push(b'(');
-        for c in text.chars() {
-            let b = char_to_winansi(c).unwrap_or(b'?');
+        for &b in text {
             match b {
                 b'(' | b')' | b'\\' => {
                     self.content.push(b'\\');
@@ -557,6 +688,23 @@ impl PdfNativeBackend {
 
     // ── barcode orientation transforms ─────────────────────────────
 
+    fn validate_barcode_bounds(x: u32, y: u32, width: u32, height: u32) -> ZplResult<()> {
+        super::validate_raster_dimensions(width, height)?;
+        let right = x
+            .checked_add(width)
+            .ok_or_else(|| ZplError::BackendError("Barcode x coordinates overflow".into()))?;
+        let bottom = y
+            .checked_add(height)
+            .ok_or_else(|| ZplError::BackendError("Barcode y coordinates overflow".into()))?;
+        // The rotation helpers use i32; validate before converting coordinates.
+        if right > i32::MAX as u32 || bottom > i32::MAX as u32 {
+            return Err(ZplError::BackendError(format!(
+                "Barcode bounds exceed supported coordinates: ({x}, {y}), {width}x{height}"
+            )));
+        }
+        Ok(())
+    }
+
     /// Map a local rectangle inside a 1-D barcode to absolute dot coordinates
     /// according to the requested orientation.
     ///
@@ -645,6 +793,18 @@ impl PdfNativeBackend {
         hints: Option<EncodeHints>,
         hints_key: &str,
     ) -> ZplResult<()> {
+        let mw = module_width.max(1);
+        super::validate_raster_dimensions(mw, height)?;
+        let two_width = symbology::is_two_width(format);
+        if two_width
+            && (!ratio.is_finite()
+                || ratio <= 0.0
+                || ((mw as f32) * ratio).round() > super::MAX_IMAGE_DIMENSION as f32)
+        {
+            return Err(ZplError::BackendError(
+                "Invalid barcode wide:narrow ratio".into(),
+            ));
+        }
         let numeric_data;
         let data = match format {
             BarcodeFormat::EAN_13
@@ -670,15 +830,19 @@ impl PdfNativeBackend {
         };
 
         let bit_matrix = barcode_cache::encode_cached(format, data, hints_key, hints.as_ref())?;
-
-        let mw = max(module_width, 1);
+        super::validate_raster_dimensions(bit_matrix.getWidth(), bit_matrix.getHeight())?;
+        if !two_width {
+            // Every run uses modules * mw in matrix_elements; check the total
+            // first so neither the multiplication nor its footprint can overflow.
+            let width = bit_matrix
+                .getWidth()
+                .checked_mul(mw)
+                .ok_or_else(|| ZplError::BackendError("Barcode width overflows".into()))?;
+            super::validate_raster_dimensions(width, height)?;
+        }
         // Two-width symbologies are re-laid-out at the ^BY ratio; every other
         // symbology keeps the encoder's module widths.
-        let elements = symbology::matrix_elements(
-            &bit_matrix,
-            mw,
-            symbology::is_two_width(format).then_some(ratio),
-        );
+        let elements = symbology::matrix_elements(&bit_matrix, mw, two_width.then_some(ratio));
 
         self.draw_elements(
             x,
@@ -712,12 +876,23 @@ impl PdfNativeBackend {
         data: &str,
     ) -> ZplResult<()> {
         let bh = height;
-        let bw: u32 = elements.iter().map(|e| e.width).sum();
+        let bw = elements.iter().try_fold(0u32, |total, element| {
+            if element.width == 0 {
+                return Err(ZplError::BackendError(
+                    "Barcode element has zero width".into(),
+                ));
+            }
+            total
+                .checked_add(element.width)
+                .ok_or_else(|| ZplError::BackendError("Barcode width overflows".into()))
+        })?;
 
         let (full_w, full_h) = match orientation {
             'R' | 'B' => (bh, bw),
             _ => (bw, bh),
         };
+        Self::validate_barcode_bounds(x, y, full_w, full_h)?;
+        super::validate_raster_dimensions(module_width.max(1), 1)?;
 
         // ── emit bar rectangles ────────────────────────────────────
         self.save_state();
@@ -727,6 +902,9 @@ impl PdfNativeBackend {
 
         let mut cursor = 0u32;
         for element in elements {
+            let next = cursor
+                .checked_add(element.width)
+                .ok_or_else(|| ZplError::BackendError("Barcode cursor overflows".into()))?;
             if element.bar {
                 let (rx, ry, rw, rh) = Self::transform_1d_bar(
                     orientation,
@@ -745,7 +923,7 @@ impl PdfNativeBackend {
                 let ph = self.d2pt(rh as f64);
                 self.emit_nums(&[px, py, pw, ph], "re");
             }
-            cursor += element.width;
+            cursor = next;
         }
         if reverse_print {
             // Use the bars as a clip and invert the backdrop inside them.
@@ -791,21 +969,46 @@ impl PdfNativeBackend {
         interpretation_line: char,
         interpretation_line_above: char,
     ) -> ZplResult<()> {
-        let bars = symbology::postnet_bars(data);
+        super::validate_raster_dimensions(module_width.max(1), height)?;
         let (bar_w, gap) = symbology::postnet_pitch(module_width);
-        let pitch = bar_w + gap;
-        let short_h = ((height as f32) * symbology::POSTNET_SHORT_RATIO).round() as u32;
-        let full_w = bars.len() as u32 * bar_w + bars.len().saturating_sub(1) as u32 * gap;
+        let pitch = bar_w
+            .checked_add(gap)
+            .ok_or_else(|| ZplError::BackendError("POSTNET pitch overflows".into()))?;
+        // Five bars per digit, five for the check digit and two frame bars.
+        // Check the resulting footprint before the native encoder allocates.
+        let digit_count = u32::try_from(data.bytes().filter(|byte| byte.is_ascii_digit()).count())
+            .map_err(|_| ZplError::BackendError("POSTNET digit count overflows".into()))?;
+        let bar_count = digit_count
+            .checked_mul(5)
+            .and_then(|count| count.checked_add(7))
+            .ok_or_else(|| ZplError::BackendError("POSTNET bar count overflows".into()))?;
+        let full_w = bar_count
+            .checked_mul(pitch)
+            .and_then(|width| width.checked_sub(gap))
+            .ok_or_else(|| ZplError::BackendError("POSTNET width overflows".into()))?;
         let (span_w, span_h) = match orientation {
             'R' | 'B' => (height, full_w),
             _ => (full_w, height),
         };
+        Self::validate_barcode_bounds(x, y, span_w, span_h)?;
+        let short_h = ((height as f32) * symbology::POSTNET_SHORT_RATIO).round() as u32;
+        if short_h == 0 {
+            return Err(ZplError::BackendError(
+                "POSTNET short bars have zero height".into(),
+            ));
+        }
+        let bars = symbology::postnet_bars(data);
 
         self.save_state();
         if !reverse_print {
             self.set_fill_color(0.0, 0.0, 0.0);
         }
         for (i, bar) in bars.iter().enumerate() {
+            let index = u32::try_from(i)
+                .map_err(|_| ZplError::BackendError("POSTNET bar index overflows".into()))?;
+            let lx = index
+                .checked_mul(pitch)
+                .ok_or_else(|| ZplError::BackendError("POSTNET bar offset overflows".into()))?;
             let h = match bar {
                 symbology::BarHeight::Full => height,
                 symbology::BarHeight::Half => short_h,
@@ -816,7 +1019,7 @@ impl PdfNativeBackend {
                 orientation,
                 x,
                 y,
-                (i as u32 * pitch) as i32,
+                lx as i32,
                 top as i32,
                 bar_w,
                 h,
@@ -863,21 +1066,38 @@ impl PdfNativeBackend {
         data: &str,
         interpretation_line_above: char,
     ) -> ZplResult<()> {
+        if data.is_empty() {
+            return Ok(());
+        }
         {
+            super::validate_raster_dimensions(module_width.max(1), 1)?;
             let (font_char, text_h, text_w, gap) =
                 crate::engine::font::interpretation_metrics(module_width);
+            super::validate_raster_dimensions(text_w, text_h)?;
             let text_y = if interpretation_line_above == 'Y' {
-                y.saturating_sub(text_h + gap)
+                let above = text_h.checked_add(gap).ok_or_else(|| {
+                    ZplError::BackendError("Barcode text offset overflows".into())
+                })?;
+                y.saturating_sub(above)
             } else {
-                y + full_h + gap
+                y.checked_add(full_h)
+                    .and_then(|bottom| bottom.checked_add(gap))
+                    .ok_or_else(|| {
+                        ZplError::BackendError("Barcode text coordinates overflow".into())
+                    })?
             };
 
             let text_width = self.get_text_width(data, font_char, Some(text_h), Some(text_w));
             let text_x = if full_w > text_width {
-                x + (full_w - text_width) / 2
+                x.checked_add((full_w - text_width) / 2).ok_or_else(|| {
+                    ZplError::BackendError("Barcode text coordinates overflow".into())
+                })?
             } else {
                 x
             };
+            if text_width > 0 {
+                Self::validate_barcode_bounds(text_x, text_y, text_width, text_h)?;
+            }
 
             self.draw_text(
                 text_x,
@@ -908,11 +1128,22 @@ impl PdfNativeBackend {
         cell_h: u32,
         bit_matrix: &BitMatrix,
         reverse_print: bool,
-    ) {
+    ) -> ZplResult<()> {
+        super::validate_raster_dimensions(cell_w, cell_h)?;
         let bw = bit_matrix.getWidth();
         let bh = bit_matrix.getHeight();
-        let full_w = bw * cell_w;
-        let full_h = bh * cell_h;
+        let full_w = bw
+            .checked_mul(cell_w)
+            .ok_or_else(|| ZplError::BackendError("Barcode width overflows".into()))?;
+        let full_h = bh
+            .checked_mul(cell_h)
+            .ok_or_else(|| ZplError::BackendError("Barcode height overflows".into()))?;
+        let (draw_w, draw_h) = if matches!(orientation, 'R' | 'B') {
+            (full_h, full_w)
+        } else {
+            (full_w, full_h)
+        };
+        Self::validate_barcode_bounds(x, y, draw_w, draw_h)?;
 
         self.save_state();
         if !reverse_print {
@@ -920,14 +1151,20 @@ impl PdfNativeBackend {
         }
 
         for gy in 0..bh {
+            let ly = gy
+                .checked_mul(cell_h)
+                .ok_or_else(|| ZplError::BackendError("Barcode row offset overflows".into()))?;
             for gx in 0..bw {
                 if bit_matrix.get(gx, gy) {
+                    let lx = gx.checked_mul(cell_w).ok_or_else(|| {
+                        ZplError::BackendError("Barcode column offset overflows".into())
+                    })?;
                     let (rx, ry, rw, rh) = Self::transform_2d_cell(
                         orientation,
                         x,
                         y,
-                        (gx * cell_w) as i32,
-                        (gy * cell_h) as i32,
+                        lx as i32,
+                        ly as i32,
                         cell_w,
                         cell_h,
                         full_w,
@@ -953,6 +1190,7 @@ impl PdfNativeBackend {
             self.emit_op("f");
         }
         self.restore_state();
+        Ok(())
     }
 }
 
@@ -996,6 +1234,21 @@ impl ZplForgeBackend for PdfNativeBackend {
         if text.is_empty() {
             return Ok(());
         }
+
+        // Reject unsupported text before emitting q/BT, keeping the stream valid
+        // if the caller handles the error and continues drawing.
+        let encoded_text = text
+            .chars()
+            .map(|c| {
+                char_to_winansi(c).ok_or_else(|| {
+                    ZplError::FontError(format!(
+                        "Character U+{:04X} is not representable in PDF WinAnsi encoding",
+                        c as u32
+                    ))
+                })
+            })
+            .collect::<ZplResult<Vec<u8>>>()?;
+        let (r, g, b) = Self::parse_hex_color_f64(&color)?;
 
         let layout = {
             let fm = self
@@ -1065,7 +1318,6 @@ impl ZplForgeBackend for PdfNativeBackend {
 
         self.save_state();
         if !reverse_print {
-            let (r, g, b) = Self::parse_hex_color_f64(&color);
             self.set_fill_color(r, g, b);
         }
 
@@ -1077,7 +1329,7 @@ impl ZplForgeBackend for PdfNativeBackend {
         self.emit_nums(&tm, "Tm");
         let font_resource_name = format!("F_{}", font);
         self.emit_name_op(&format!("{} 1", font_resource_name), "Tf");
-        self.emit_tj(text);
+        self.emit_tj(&encoded_text);
         self.emit_op("ET");
 
         if reverse_print {
@@ -1111,7 +1363,7 @@ impl ZplForgeBackend for PdfNativeBackend {
         let t = thickness as f64;
         let r_dots = rounding as f64 * 8.0;
 
-        let (draw_color, clear_color) = Self::resolve_colors(color, &custom_color);
+        let (draw_color, clear_color) = Self::resolve_colors(color, &custom_color)?;
 
         let bx = self.x_pt(x as f64);
         let by = self.y_pt_bottom(y as f64, h);
@@ -1190,7 +1442,7 @@ impl ZplForgeBackend for PdfNativeBackend {
         custom_color: Option<String>,
         reverse_print: bool,
     ) -> ZplResult<()> {
-        let (draw_color, _) = Self::resolve_colors('B', &custom_color);
+        let (draw_color, _) = Self::resolve_colors('B', &custom_color)?;
 
         let r_pt = self.d2pt(radius as f64);
         // ZPL (x,y) = top-left of bounding box → centre
@@ -1247,7 +1499,7 @@ impl ZplForgeBackend for PdfNativeBackend {
         custom_color: Option<String>,
         reverse_print: bool,
     ) -> ZplResult<()> {
-        let (draw_color, _) = Self::resolve_colors('B', &custom_color);
+        let (draw_color, _) = Self::resolve_colors('B', &custom_color)?;
 
         let rx_pt = self.d2pt(width as f64 / 2.0);
         let ry_pt = self.d2pt(height as f64 / 2.0);
@@ -1301,17 +1553,13 @@ impl ZplForgeBackend for PdfNativeBackend {
         data: &[u8],
         reverse_print: bool,
     ) -> ZplResult<()> {
-        if width == 0 || height == 0 {
-            return Ok(());
-        }
-
         // ZPL ^GF rows are already byte-padded (ceil(width/8) bytes per row),
         // exactly the layout a 1-bit PDF image expects. Pad or truncate to the
-        // full bitmap size; padding bytes are 0 (unpainted with Decode [1 0]).
-        let row_bytes = width.div_ceil(8) as usize;
-        let total_bytes = row_bytes * height as usize;
-        let mut bits = data.to_vec();
-        bits.resize(total_bytes, 0x00);
+        // validated bitmap size without cloning excess input data.
+        let total_bytes = super::bitmap_size(width, height)?;
+        let mut bits = vec![0x00; total_bytes];
+        let copy_len = data.len().min(total_bytes);
+        bits[..copy_len].copy_from_slice(&data[..copy_len]);
 
         self.embed_mask_image(x as f64, y as f64, width, height, bits, reverse_print);
         Ok(())
@@ -1327,15 +1575,13 @@ impl ZplForgeBackend for PdfNativeBackend {
         height: u32,
         data: &str,
     ) -> ZplResult<()> {
-        let image_data = general_purpose::STANDARD
-            .decode(data.trim())
-            .map_err(|e| ZplError::ImageError(format!("Failed to decode base64: {}", e)))?;
-
-        let img = image::load_from_memory(&image_data)
-            .map_err(|e| ZplError::ImageError(format!("Failed to load image: {}", e)))?
-            .to_rgb8();
+        // Zero requests natural/proportional size, but explicit dimensions
+        // must be bounded before decoding or allocating a resized image.
+        super::validate_raster_dimensions(width.max(1), height.max(1))?;
+        let img = super::decode_color_image(data)?;
 
         let (orig_w, orig_h) = img.dimensions();
+        super::validate_raster_dimensions(orig_w, orig_h)?;
         let (target_w, target_h) = match (width, height) {
             (0, 0) => (orig_w, orig_h),
             (w, 0) => {
@@ -1349,6 +1595,7 @@ impl ZplForgeBackend for PdfNativeBackend {
             (w, h) => (w, h),
         };
 
+        super::validate_raster_dimensions(target_w, target_h)?;
         let final_img = if target_w != orig_w || target_h != orig_h {
             image::imageops::resize(
                 &img,
@@ -1445,8 +1692,10 @@ impl ZplForgeBackend for PdfNativeBackend {
         )?;
 
         let mag = max(magnification, 1);
-        self.fill_matrix_cells(x, y, orientation, mag, mag, &bit_matrix, reverse_print);
-        Ok(())
+        let y = y
+            .checked_add(super::QR_ORIGIN_Y_OFFSET)
+            .ok_or_else(|| ZplError::BackendError("QR origin coordinates overflow".into()))?;
+        self.fill_matrix_cells(x, y, orientation, mag, mag, &bit_matrix, reverse_print)
     }
 
     // ── Data Matrix barcode ────────────────────────────────────────
@@ -1471,8 +1720,7 @@ impl ZplForgeBackend for PdfNativeBackend {
             barcode_cache::encode_cached(BarcodeFormat::DATA_MATRIX, data, "sq", Some(&hints))?;
 
         let m = max(module_size, 1);
-        self.fill_matrix_cells(x, y, orientation, m, m, &bit_matrix, reverse_print);
-        Ok(())
+        self.fill_matrix_cells(x, y, orientation, m, m, &bit_matrix, reverse_print)
     }
 
     // ── PDF417 barcode ─────────────────────────────────────────────
@@ -1488,44 +1736,40 @@ impl ZplForgeBackend for PdfNativeBackend {
         data: &str,
         reverse_print: bool,
     ) -> ZplResult<()> {
-        let mut hints = HashMap::new();
-        hints.insert(
-            EncodeHintType::ERROR_CORRECTION,
-            EncodeHintValue::ErrorCorrection(security_level.min(8).to_string()),
-        );
-        hints.insert(
-            EncodeHintType::MARGIN,
-            EncodeHintValue::Margin("0".to_owned()),
-        );
-        let hints: EncodeHints = hints.into();
+        let ec = security_level.min(8);
+        let hints = EncodeHints {
+            ErrorCorrection: Some(ec.to_string()),
+            Pdf417Compaction: Some(PDF417_TEXT_COMPACTION.to_string()),
+            Pdf417Dimensions: Some(super::pdf417_dimensions(None, None)),
+            ..Default::default()
+        };
 
         let bit_matrix = barcode_cache::encode_cached(
             BarcodeFormat::PDF_417,
             data,
-            &format!("ec:{}", security_level.min(8)),
+            &format!("ec:{ec}:c1:t"),
             Some(&hints),
         )?;
+        let bit_matrix = super::pdf417_descale(&bit_matrix)?;
 
         let cw = max(module_width, 1);
         let ch = max(row_height, 1);
-        self.fill_matrix_cells(x, y, orientation, cw, ch, &bit_matrix, reverse_print);
-        Ok(())
+        self.fill_matrix_cells(x, y, orientation, cw, ch, &bit_matrix, reverse_print)
     }
 
     fn draw_micropdf417(
         &mut self,
-        x: u32,
-        y: u32,
-        orientation: char,
-        height: u32,
+        _x: u32,
+        _y: u32,
+        _orientation: char,
+        _height: u32,
         _mode: u32,
-        data: &str,
-        reverse_print: bool,
+        _data: &str,
+        _reverse_print: bool,
     ) -> ZplResult<()> {
-        let bit_matrix = barcode_cache::encode_cached(BarcodeFormat::PDF_417, data, "", None)?;
-        let ch = max(height, 1);
-        self.fill_matrix_cells(x, y, orientation, 1, ch, &bit_matrix, reverse_print);
-        Ok(())
+        Err(ZplError::BackendError(
+            "MicroPDF417 is not supported by the native PDF backend".into(),
+        ))
     }
 
     fn draw_aztec_code(
@@ -1539,8 +1783,7 @@ impl ZplForgeBackend for PdfNativeBackend {
     ) -> ZplResult<()> {
         let bit_matrix = barcode_cache::encode_cached(BarcodeFormat::AZTEC, data, "", None)?;
         let m = max(magnification, 1);
-        self.fill_matrix_cells(x, y, orientation, m, m, &bit_matrix, reverse_print);
-        Ok(())
+        self.fill_matrix_cells(x, y, orientation, m, m, &bit_matrix, reverse_print)
     }
 
     // ── Code 39 barcode ────────────────────────────────────────────
@@ -1593,10 +1836,62 @@ impl ZplForgeBackend for PdfNativeBackend {
         data: &str,
         reverse_print: bool,
     ) -> ZplResult<()> {
+        super::validate_raster_dimensions(module_width.max(1), height)?;
         // MSI and POSTNET have no rxing writer; both are encoded natively.
         match kind {
             Barcode1DKind::Msi => {
+                let narrow = module_width.max(1);
+                let wide = ((narrow as f32) * ratio).round().max(narrow as f32 + 1.0);
+                if !ratio.is_finite() || ratio <= 0.0 || wide > super::MAX_IMAGE_DIMENSION as f32 {
+                    return Err(ZplError::BackendError(
+                        "Invalid MSI wide:narrow ratio".into(),
+                    ));
+                }
+                let wide = wide as u32;
                 let check = symbology::MsiCheck::from_zpl(check_digit);
+                let check_digits = match check {
+                    symbology::MsiCheck::None => 0,
+                    symbology::MsiCheck::Mod10 => 1,
+                    symbology::MsiCheck::Mod10Twice => 2,
+                    symbology::MsiCheck::Mod11Mod10 => {
+                        let digits = data
+                            .bytes()
+                            .filter(u8::is_ascii_digit)
+                            .map(|byte| byte - b'0');
+                        if symbology::msi_mod11(digits) == 10 {
+                            3
+                        } else {
+                            2
+                        }
+                    }
+                };
+                let digit_count =
+                    u32::try_from(data.bytes().filter(|byte| byte.is_ascii_digit()).count())
+                        .map_err(|_| ZplError::BackendError("MSI digit count overflows".into()))?
+                        .checked_add(check_digits)
+                        .ok_or_else(|| {
+                            ZplError::BackendError("MSI digit count overflows".into())
+                        })?;
+                // Four narrow/wide pairs per digit; the frame adds 3 narrow
+                // and 2 wide elements. Bound the exact width before encoding.
+                let digit_width = narrow
+                    .checked_add(wide)
+                    .and_then(|width| width.checked_mul(4))
+                    .ok_or_else(|| ZplError::BackendError("MSI digit width overflows".into()))?;
+                let frame_width = narrow
+                    .checked_mul(3)
+                    .and_then(|width| width.checked_add(wide.checked_mul(2)?))
+                    .ok_or_else(|| ZplError::BackendError("MSI frame width overflows".into()))?;
+                let full_w = digit_count
+                    .checked_mul(digit_width)
+                    .and_then(|width| width.checked_add(frame_width))
+                    .ok_or_else(|| ZplError::BackendError("MSI width overflows".into()))?;
+                let (draw_w, draw_h) = if matches!(orientation, 'R' | 'B') {
+                    (height, full_w)
+                } else {
+                    (full_w, height)
+                };
+                Self::validate_barcode_bounds(x, y, draw_w, draw_h)?;
                 let elements = symbology::msi_elements(data, check, module_width, ratio);
                 let text = symbology::msi_text(data, check);
                 return self.draw_elements(
@@ -1659,7 +1954,7 @@ impl ZplForgeBackend for PdfNativeBackend {
         diagonal_orientation: char,
         reverse_print: bool,
     ) -> ZplResult<()> {
-        let (draw_color, _) = Self::resolve_colors(color, &custom_color);
+        let (draw_color, _) = Self::resolve_colors(color, &custom_color)?;
 
         let w = max(width, 1) as f64;
         let h = max(height, 1) as f64;
@@ -1703,7 +1998,17 @@ impl ZplForgeBackend for PdfNativeBackend {
     // ── finalize ───────────────────────────────────────────────────
 
     fn finalize(&mut self) -> ZplResult<Vec<u8>> {
-        let mut doc = Document::with_version("1.5");
+        // lopdf serializes MediaBox reals as f32, even when geometry uses f64.
+        if !(self.width_pt as f32).is_finite()
+            || !(self.height_pt as f32).is_finite()
+            || self.width_pt <= 0.0
+            || self.height_pt <= 0.0
+        {
+            return Err(ZplError::BackendError(
+                "PDF page dimensions are outside the supported numeric range".into(),
+            ));
+        }
+        let mut doc = Document::with_version("1.6");
         let pages_id = doc.new_object_id();
 
         // ── embed fonts ────────────────────────────────────────────
@@ -1740,9 +2045,32 @@ impl ZplForgeBackend for PdfNativeBackend {
                 .and_then(|fm| fm.get_font_bytes(&font_key))
                 .unwrap_or(default_font_bytes);
 
+            let (font_subtype, font_file_key, font_name, stream_dict) =
+                match pdf_font_format(raw_bytes)? {
+                    PdfFontFormat::TrueType => (
+                        "TrueType",
+                        "FontFile2",
+                        actual_name.as_bytes(),
+                        dictionary! { "Length1" => raw_bytes.len() as i64 },
+                    ),
+                    PdfFontFormat::OpenTypeCff(name) => (
+                        "Type1",
+                        "FontFile3",
+                        name,
+                        dictionary! { "Subtype" => "OpenType" },
+                    ),
+                };
             let face = FontArc::try_from_vec(raw_bytes.to_vec())
                 .map_err(|e| ZplError::FontError(format!("Invalid font data: {}", e)))?;
-            let upem = face.units_per_em().unwrap_or(1000.0) as f64;
+            let upem = face
+                .units_per_em()
+                .ok_or_else(|| ZplError::FontError("Font has no units-per-em value".into()))?
+                as f64;
+            if !upem.is_finite() || upem <= 0.0 {
+                return Err(ZplError::FontError(
+                    "Invalid font units-per-em value".into(),
+                ));
+            }
             let to_glyph_space = |v: f64| (v * 1000.0 / upem).round() as i64;
 
             // /Widths for the WinAnsi code range 32..=255.
@@ -1758,15 +2086,12 @@ impl ZplForgeBackend for PdfNativeBackend {
             // Bounding box and style metrics via ttf-parser (lopdf::FontData).
             let fd = FontData::new(raw_bytes, actual_name.clone());
 
-            let font_stream = Stream::new(
-                dictionary! { "Length1" => raw_bytes.len() as i64 },
-                raw_bytes.to_vec(),
-            );
+            let font_stream = Stream::new(stream_dict, raw_bytes.to_vec());
             let font_file_id = doc.add_object(font_stream);
 
-            let descriptor_id = doc.add_object(dictionary! {
+            let mut descriptor = dictionary! {
                 "Type" => "FontDescriptor",
-                "FontName" => Object::Name(actual_name.clone().into_bytes()),
+                "FontName" => Object::Name(font_name.to_vec()),
                 "Flags" => 32_i64,
                 "FontBBox" => vec![
                     to_glyph_space(fd.font_bbox.0 as f64).into(),
@@ -1779,13 +2104,14 @@ impl ZplForgeBackend for PdfNativeBackend {
                 "Descent" => to_glyph_space(fd.descent as f64),
                 "CapHeight" => to_glyph_space(fd.cap_height as f64),
                 "StemV" => 80_i64,
-                "FontFile2" => font_file_id,
-            });
+            };
+            descriptor.set(font_file_key, font_file_id);
+            let descriptor_id = doc.add_object(descriptor);
 
             let font_id = doc.add_object(dictionary! {
                 "Type" => "Font",
-                "Subtype" => "TrueType",
-                "BaseFont" => Object::Name(actual_name.clone().into_bytes()),
+                "Subtype" => font_subtype,
+                "BaseFont" => Object::Name(font_name.to_vec()),
                 "FirstChar" => 32_i64,
                 "LastChar" => 255_i64,
                 "Widths" => widths,
@@ -1819,7 +2145,7 @@ impl ZplForgeBackend for PdfNativeBackend {
                     "Height" => img.height as i64,
                     "ImageMask" => true,
                     "BitsPerComponent" => 1,
-                    "Decode" => vec![0.into(), 1.into()],
+                    "Decode" => vec![1.into(), 0.into()],
                     "Filter" => "FlateDecode",
                 }
             } else {

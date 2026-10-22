@@ -1,7 +1,7 @@
 use super::{common, state};
-use crate::ZplResult;
 use crate::ast::cmd;
 use crate::tools;
+use crate::{ZplError, ZplResult};
 
 /// `^BY` wide:narrow ratio applied when a label never sets one.
 ///
@@ -10,37 +10,44 @@ use crate::tools;
 /// `^BY` was omitted.
 const DEFAULT_BAR_RATIO: f64 = 3.0;
 
-/// Decodes hexadecimal escape sequences (e.g. `_XX`) inside `FieldData` strings when `^FH` is active.
-fn unescape_hex(data: &str, indicator: char) -> String {
-    let mut result = String::with_capacity(data.len());
+/// Decodes `^FH` bytes before interpreting UTF-8 selected by `^CI28`.
+fn unescape_hex(data: &str, indicator: char, charset: u32) -> ZplResult<String> {
+    if !matches!(charset, 0 | 28) {
+        return Err(ZplError::InstructionError(format!(
+            "Hex field decoding does not support ^CI{charset}; use ^CI28 for UTF-8"
+        )));
+    }
+    let mut result = Vec::with_capacity(data.len());
     let mut chars = data.chars().peekable();
+    let mut buffer = [0; 4];
 
     while let Some(ch) = chars.next() {
         if ch == indicator {
-            let mut hex_str = String::new();
-            if let Some(&c1) = chars.peek()
-                && c1.is_ascii_hexdigit()
+            let mut lookahead = chars.clone();
+            if let (Some(first), Some(second)) = (lookahead.next(), lookahead.next())
+                && first.is_ascii_hexdigit()
+                && second.is_ascii_hexdigit()
             {
-                hex_str.push(chars.next().unwrap());
-                if let Some(&c2) = chars.peek()
-                    && c2.is_ascii_hexdigit()
-                {
-                    hex_str.push(chars.next().unwrap());
+                let hex = [first as u8, second as u8];
+                let hex = std::str::from_utf8(&hex).map_err(|error| {
+                    ZplError::InstructionError(format!("Invalid hex escape: {error}"))
+                })?;
+                let byte = u8::from_str_radix(hex, 16).map_err(|error| {
+                    ZplError::InstructionError(format!("Invalid hex escape: {error}"))
+                })?;
+                chars = lookahead;
+                if charset == 28 {
+                    result.push(byte);
+                } else {
+                    result.extend_from_slice((byte as char).encode_utf8(&mut buffer).as_bytes());
                 }
-            }
-            if hex_str.len() == 2
-                && let Ok(byte) = u8::from_str_radix(&hex_str, 16)
-            {
-                result.push(byte as char);
                 continue;
             }
-            result.push(indicator);
-            result.push_str(&hex_str);
-        } else {
-            result.push(ch);
         }
+        result.extend_from_slice(ch.encode_utf8(&mut buffer).as_bytes());
     }
-    result
+    String::from_utf8(result)
+        .map_err(|error| ZplError::InstructionError(format!("Invalid UTF-8 field data: {error}")))
 }
 
 /// A builder that converts a sequence of AST commands into renderable instructions.
@@ -148,7 +155,7 @@ impl ZplInstructionBuilder {
 
                 cmd::Command::FieldData { data } => {
                     let unescaped = if let Some(indicator) = self.state.hex_escape {
-                        unescape_hex(&data, indicator)
+                        unescape_hex(&data, indicator, self.state.charset)?
                     } else {
                         data
                     };
@@ -225,39 +232,45 @@ impl ZplInstructionBuilder {
                     bytes_per_row,
                     data,
                 } => {
-                    let compression_type = compression_type.unwrap_or('A');
-                    let bytes: Vec<u8> = match compression_type {
-                        'A' => {
-                            let bpr_val = bytes_per_row.unwrap_or(0) as usize;
-                            tools::zpl_decode(&data, bpr_val)
-                        }
-                        'B' => {
-                            // method not implemented
-                            break;
-                        }
-                        'C' => {
-                            // method not implemented
-                            break;
-                        }
-                        'Z' => {
-                            // method not implemented
-                            break;
-                        }
-                        _ => {
-                            #[cfg(feature = "tracing")]
-                            tracing::warn!("Unsupported compression type: {}", compression_type);
-                            break;
-                        }
-                    };
-
-                    if let Some(bpr) = bytes_per_row {
-                        self.state.metrics.width = bpr.saturating_mul(8);
-                        if let Some(total) = graphic_field_count
-                            && bpr > 0
-                        {
-                            self.state.metrics.height = total / bpr;
-                        }
+                    let compression = compression_type.unwrap_or('A');
+                    if compression != 'A' {
+                        return Err(ZplError::InstructionError(format!(
+                            "Unsupported ^GF compression type: {compression}"
+                        )));
                     }
+                    let bpr = bytes_per_row.filter(|&value| value > 0).ok_or_else(|| {
+                        ZplError::ImageError("^GF bytes per row must be positive".into())
+                    })?;
+                    let total =
+                        graphic_field_count
+                            .filter(|&value| value > 0)
+                            .ok_or_else(|| {
+                                ZplError::ImageError("^GF byte count must be positive".into())
+                            })?;
+                    if total % bpr != 0 {
+                        return Err(ZplError::ImageError(
+                            "^GF byte count must contain complete rows".into(),
+                        ));
+                    }
+                    let width = bpr.checked_mul(8).ok_or_else(|| {
+                        ZplError::SecurityLimitExceeded("^GF width overflow".into())
+                    })?;
+                    let height = total / bpr;
+                    let size = crate::forge::bitmap_size(width, height)?;
+                    let mut bytes = tools::zpl_decode(&data, bpr as usize)?;
+                    if bytes.len() > size {
+                        return Err(ZplError::ImageError(
+                            "^GF data exceeds its declared byte count".into(),
+                        ));
+                    }
+                    bytes.try_reserve(size - bytes.len()).map_err(|error| {
+                        ZplError::SecurityLimitExceeded(format!(
+                            "Cannot allocate ^GF bitmap: {error}"
+                        ))
+                    })?;
+                    bytes.resize(size, 0);
+                    self.state.metrics.width = width;
+                    self.state.metrics.height = height;
                     self.state.graphic_data = Some(bytes);
                     self.state.instruction_type = Some(state::ZplInstructionType::GraphicField);
                 }
@@ -328,9 +341,10 @@ impl ZplInstructionBuilder {
                     height,
                     interpretation_line,
                     interpretation_line_above,
-                    check_digit: _,
+                    check_digit,
                 } => {
                     self.state.attributes.orientation = orientation;
+                    self.state.attributes.check_digit = check_digit;
                     self.state.metrics.height =
                         height.unwrap_or(if self.state.barcode_metrics.height > 0 {
                             self.state.barcode_metrics.height
@@ -758,6 +772,7 @@ impl ZplInstructionBuilder {
                     self.state.instruction_type = None;
                     self.state.reverse = false;
                     self.state.field_block = None;
+                    self.state.hex_escape = None;
                 }
 
                 _ => {}

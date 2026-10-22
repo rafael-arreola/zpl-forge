@@ -11,6 +11,99 @@ pub mod png;
 #[cfg(any(feature = "png", feature = "pdf"))]
 pub(crate) mod symbology;
 
+pub(crate) const MAX_IMAGE_DIMENSION: u32 = 8192;
+
+pub(crate) fn validate_raster_dimensions(width: u32, height: u32) -> crate::ZplResult<()> {
+    if width == 0 || height == 0 {
+        return Err(crate::ZplError::ImageError(
+            "Image dimensions must be positive".into(),
+        ));
+    }
+    if width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION {
+        return Err(crate::ZplError::SecurityLimitExceeded(format!(
+            "Image dimensions {width}x{height} exceed {MAX_IMAGE_DIMENSION}x{MAX_IMAGE_DIMENSION}"
+        )));
+    }
+    Ok(())
+}
+
+pub(crate) fn bitmap_size(width: u32, height: u32) -> crate::ZplResult<usize> {
+    validate_raster_dimensions(width, height)?;
+    let size = (width.div_ceil(8) as usize)
+        .checked_mul(height as usize)
+        .filter(|&size| size <= crate::tools::MAX_DECODED_SIZE)
+        .ok_or_else(|| crate::ZplError::SecurityLimitExceeded("Bitmap exceeds 10 MiB".into()))?;
+    Ok(size)
+}
+
+#[cfg(any(feature = "png", feature = "pdf"))]
+pub(crate) fn parse_hex_color(color: Option<&str>) -> crate::ZplResult<[u8; 3]> {
+    let Some(color) = color else {
+        return Ok([0, 0, 0]);
+    };
+    let hex = color.strip_prefix('#').unwrap_or(color).as_bytes();
+    if !matches!(hex.len(), 3 | 6) || !hex.iter().all(u8::is_ascii_hexdigit) {
+        return Err(crate::ZplError::BackendError(format!(
+            "Invalid RGB hex color: {color}"
+        )));
+    }
+    let nibble = |c: u8| {
+        if c.is_ascii_digit() {
+            c - b'0'
+        } else {
+            c.to_ascii_uppercase() - b'A' + 10
+        }
+    };
+    Ok(if hex.len() == 3 {
+        [
+            nibble(hex[0]) * 17,
+            nibble(hex[1]) * 17,
+            nibble(hex[2]) * 17,
+        ]
+    } else {
+        [
+            (nibble(hex[0]) << 4) | nibble(hex[1]),
+            (nibble(hex[2]) << 4) | nibble(hex[3]),
+            (nibble(hex[4]) << 4) | nibble(hex[5]),
+        ]
+    })
+}
+
+#[cfg(any(feature = "png", feature = "pdf"))]
+pub(crate) fn decode_color_image(data: &str) -> crate::ZplResult<image::RgbImage> {
+    use base64::{Engine as _, engine::general_purpose};
+
+    let data = data.trim();
+    if data.len() > crate::tools::MAX_DECODED_SIZE.div_ceil(3) * 4 {
+        return Err(crate::ZplError::SecurityLimitExceeded(
+            "Encoded image exceeds 10 MiB of binary data".into(),
+        ));
+    }
+    let bytes = general_purpose::STANDARD.decode(data).map_err(|error| {
+        crate::ZplError::ImageError(format!("Failed to decode base64: {error}"))
+    })?;
+    if bytes.len() > crate::tools::MAX_DECODED_SIZE {
+        return Err(crate::ZplError::SecurityLimitExceeded(
+            "Encoded image binary data exceeds 10 MiB".into(),
+        ));
+    }
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|error| {
+            crate::ZplError::ImageError(format!("Failed to identify image: {error}"))
+        })?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_IMAGE_DIMENSION);
+    limits.max_image_height = Some(MAX_IMAGE_DIMENSION);
+    limits.max_alloc = Some(u64::from(MAX_IMAGE_DIMENSION).pow(2) * 4);
+    reader.limits(limits);
+    let image = reader
+        .decode()
+        .map_err(|error| crate::ZplError::ImageError(format!("Failed to decode image: {error}")))?;
+    validate_raster_dimensions(image.width(), image.height())?;
+    Ok(image.to_rgb8())
+}
+
 /// Maps a generic 1-D symbology to its `rxing` barcode format.
 #[cfg(any(feature = "png", feature = "pdf"))]
 pub(crate) fn barcode_1d_format(kind: crate::engine::Barcode1DKind) -> rxing::BarcodeFormat {

@@ -327,7 +327,7 @@ To match real printer output, identifiers **`A`–`H`** emulate Zebra's built-in
 | `^BB` | Codabar | `o,e,h,f,g,k,l` | Codabar Barcode. |
 | `^BC` | Code 128 | `o,h,f,g,e,m` | Code 128 Barcode (subsets A, B, and C). |
 | `^BE` | EAN-13 | `o,h,f,g` | EAN-13 Barcode (retail). |
-| `^BF` | MicroPDF417 | `o,h,m` | MicroPDF417 two-dimensional Barcode. |
+| `^BF` | MicroPDF417 | `o,h,m` | Parsed, but rendering returns an explicit unsupported-symbology error; it is not replaced with PDF417. |
 | `^BM` | MSI Barcode | `o,e,h,f,g,m` | MSI Barcode. |
 | `^BQ` | QR Code | `o,m,s,e,k` | QR Code (Model 1 or 2). |
 | `^BR` | GS1 DataBar | `o,t,m,s,h,w` | GS1 DataBar / RSS Barcode. |
@@ -337,7 +337,7 @@ To match real printer output, identifiers **`A`–`H`** emulate Zebra's built-in
 | `^BY` | Barcode Default | `w,r,h` | Sets default values for barcodes (module width, ratio, and height). |
 | `^BZ` | POSTNET | `o,h,f,g` | POSTNET Barcode. |
 | `^CF` | Change Def. Font | `f,h,w` | Changes the default alphanumeric font. |
-| `^CI` | Change Encoding | `a` | Changes international character set or encoding (e.g. `^CI28`). |
+| `^CI` | Change Encoding | `a` | `^CI28` decodes hexadecimal field escapes as UTF-8. Other non-default encodings for escaped data return an error. |
 | `^FB` | Field Block | `w,l,s,j,i` | Wraps text in a block: width, max lines, line spacing, justification (L/C/R), indent. `\&` breaks lines. |
 | `^FD` | Field Data | `d` | Data to print in the current field. |
 | `^FH` | Field Hex Escape | `a` | Hexadecimal field data escape indicator (e.g. `^FH_`). |
@@ -370,9 +370,21 @@ To match real printer output, identifiers **`A`–`H`** emulate Zebra's built-in
 
 ZPL-Forge imposes reasonable limits to prevent resource exhaustion from malformed or malicious ZPL inputs.
 
-- **Maximum Document Size:** Bounded to prevent memory overflow on excessively large labels.
-- **Graphic Field Maximums:** Prevents malicious `^GF` commands from allocating unlimited memory.
-- **Maximum Text Size:** Prevents excessively large font sizes.
+- **Page and Raster Dimensions:** Up to 8192 x 8192 dots/pixels; invalid page dimensions and oversized temporary rasters return errors.
+- **Graphic Field Maximums:** Decoded `^GF` data is limited to 10 MiB, checked before expansion or padding. Only ASCII/hex compression (`A`) is supported; other types return errors without dropping the rest of a label.
+- **Custom Images:** Binary input is limited to 10 MiB; dimensions and decoder allocation limits are checked before rasterization and resizing.
+- **Field Data:** Leading/trailing whitespace in `^FD` is preserved. Invalid numeric parameters and malformed colors return errors instead of falling back silently.
+- **PDF Text:** Native PDF supports WinAnsi (CP1252). Characters outside that encoding return a font error rather than becoming `?`. TrueType and non-CID OpenType/CFF1 fonts use their corresponding PDF resources; CFF2, CID CFF and font collections are not supported by the native PDF backend.
+
+### Decoder API compatibility
+
+`tools::zpl_decode` returns `ZplResult<Vec<u8>>` instead of `Vec<u8>`. Callers must handle or propagate errors:
+
+```rust
+let bitmap = zpl_forge::tools::zpl_decode("80", 1)?;
+```
+
+The decoder reports malformed data and exceeded limits rather than returning a partial bitmap.
 
 ## License
 

@@ -122,6 +122,19 @@ impl ZplEngine {
         self.fonts = Some(fonts);
     }
 
+    fn page_dimensions(&self) -> ZplResult<(u32, u32)> {
+        let dpi = self.resolution.dpi();
+        if !dpi.is_finite() || dpi <= 0.0 {
+            return Err(ZplError::InstructionError(
+                "Resolution must be finite and positive".into(),
+            ));
+        }
+        let width = self.width.to_dots(self.resolution);
+        let height = self.height.to_dots(self.resolution);
+        crate::forge::validate_raster_dimensions(width, height)?;
+        Ok((width, height))
+    }
+
     /// Renders the parsed instructions using the provided backend.
     ///
     /// # Arguments
@@ -135,8 +148,7 @@ impl ZplEngine {
         mut backend: B,
         variables: &HashMap<String, String>,
     ) -> ZplResult<Vec<u8>> {
-        let w_dots = self.width.clone().to_dots(self.resolution);
-        let h_dots = self.height.clone().to_dots(self.resolution);
+        let (w_dots, h_dots) = self.page_dimensions()?;
         let font_manager = if let Some(fonts) = &self.fonts {
             fonts.clone()
         } else {
@@ -171,8 +183,7 @@ impl ZplEngine {
             return Ok(Vec::new());
         }
 
-        let w_dots = self.width.clone().to_dots(self.resolution);
-        let h_dots = self.height.clone().to_dots(self.resolution);
+        let (w_dots, h_dots) = self.page_dimensions()?;
         let font_manager = if let Some(fonts) = &self.fonts {
             fonts.clone()
         } else {
@@ -333,35 +344,49 @@ impl ZplEngine {
                     let lines = wrap_text_block(&resolved, b.width, measure);
                     let n_lines = lines.len().min(b.max_lines.max(1) as usize);
 
-                    let font_h = height.unwrap_or(9) as i32;
-                    let line_advance = (font_h + b.line_spacing).max(1);
-                    let block_span = (n_lines as i32 - 1) * line_advance;
+                    let font_h = i64::from(height.unwrap_or(9));
+                    let line_advance = (font_h + i64::from(b.line_spacing)).max(1);
+                    let block_span = (n_lines.saturating_sub(1) as i64)
+                        .checked_mul(line_advance)
+                        .ok_or_else(|| {
+                            ZplError::InstructionError("Text block span overflow".into())
+                        })?;
 
                     for (i, line) in lines.iter().take(n_lines).enumerate() {
                         if line.is_empty() {
                             continue;
                         }
-                        let lw = measure(line) as i32;
-                        let indent = if i > 0 { b.indent as i32 } else { 0 };
-                        let avail = (b.width as i32 - indent).max(0);
+                        let lw = i64::from(measure(line));
+                        let indent = if i > 0 { i64::from(b.indent) } else { 0 };
+                        let avail = (i64::from(b.width) - indent).max(0);
                         let jx = indent
                             + match b.justification {
                                 'C' => (avail - lw).max(0) / 2,
                                 'R' => (avail - lw).max(0),
                                 _ => 0,
                             };
-                        let ly = i as i32 * line_advance;
+                        let ly = i as i64 * line_advance;
 
                         // Cell top-left offset, rotated with the field.
                         let (dx, dy) = match orientation {
                             'R' => (block_span - ly, jx),
-                            'I' => (b.width as i32 - jx - lw, block_span - ly),
-                            'B' => (ly, b.width as i32 - jx - lw),
+                            'I' => (i64::from(b.width) - jx - lw, block_span - ly),
+                            'B' => (ly, i64::from(b.width) - jx - lw),
                             _ => (jx, ly),
                         };
 
-                        let fx = (*x as i32 + dx).max(0) as u32;
-                        let fy = (*y as i32 + dy).max(0) as u32;
+                        let coordinate = |origin: u32, offset: i64| {
+                            i64::from(origin)
+                                .checked_add(offset)
+                                .and_then(|value| u32::try_from(value.max(0)).ok())
+                                .ok_or_else(|| {
+                                    ZplError::InstructionError(
+                                        "Text block coordinate overflow".into(),
+                                    )
+                                })
+                        };
+                        let fx = coordinate(*x, dx)?;
+                        let fy = coordinate(*y, dy)?;
                         backend.draw_text(
                             fx,
                             fy,

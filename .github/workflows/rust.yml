@@ -11,8 +11,19 @@ env:
 
 jobs:
   check:
-    name: Check
+    name: Features (${{ matrix.name }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: parser
+            args: --no-default-features
+          - name: png
+            args: --no-default-features --features png
+          - name: pdf
+            args: --no-default-features --features pdf
+          - name: all
+            args: --all-features
     steps:
       - uses: actions/checkout@v5
       - name: Install dependencies
@@ -22,7 +33,11 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Cargo check
-        run: cargo check
+        run: cargo check --locked --lib ${{ matrix.args }}
+      - name: Feature unit tests
+        run: cargo test --locked --lib ${{ matrix.args }}
+      - name: Feature documentation tests
+        run: cargo test --locked --doc ${{ matrix.args }}
 
   test:
     name: Test Suite
@@ -36,7 +51,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Run tests
-        run: cargo test --verbose
+        run: cargo test --locked --verbose
 
   fmt:
     name: Format
@@ -64,4 +79,4 @@ jobs:
         with:
           components: clippy
       - name: Run clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
