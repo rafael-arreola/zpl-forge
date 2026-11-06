@@ -15,6 +15,7 @@ jobs:
     environment: deployment-crates
     permissions:
       contents: write # Requerido para crear y subir etiquetas y releases en GitHub
+      id-token: write # Trusted Publishing: pedir a crates.io un token temporal (OIDC)
 
     steps:
       - name: Manual Git Checkout
@@ -77,11 +78,31 @@ jobs:
             echo "Etiqueta $TAG_NAME creada y empujada de forma exitosa."
           fi
 
+      - name: Authenticate with crates.io (Trusted Publishing)
+        if: steps.check_release.outputs.is_release == 'true'
+        id: crates_auth
+        # Falla mientras Trusted Publishing no esté configurado para este repositorio en
+        # crates.io. En ese caso el siguiente paso publica con el secret CRATES_IO_TOKEN.
+        continue-on-error: true
+        uses: rust-lang/crates-io-auth-action@v1
+
       - name: Publish to crates.io
         if: steps.check_release.outputs.is_release == 'true'
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        run: cargo publish
+          TRUSTED_PUBLISHING_TOKEN: ${{ steps.crates_auth.outputs.token }}
+          FALLBACK_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: |
+          if [ -n "$TRUSTED_PUBLISHING_TOKEN" ]; then
+            echo "Publicando con Trusted Publishing (token temporal de crates.io)."
+            export CARGO_REGISTRY_TOKEN="$TRUSTED_PUBLISHING_TOKEN"
+          elif [ -n "$FALLBACK_TOKEN" ]; then
+            echo "::warning::Trusted Publishing no está disponible; publicando con el secret CRATES_IO_TOKEN."
+            export CARGO_REGISTRY_TOKEN="$FALLBACK_TOKEN"
+          else
+            echo "::error::Sin credenciales: configura Trusted Publishing en crates.io o el secret CRATES_IO_TOKEN en el environment deployment-crates."
+            exit 1
+          fi
+          cargo publish
 
       - name: Create GitHub Release
         if: steps.check_release.outputs.is_release == 'true'
